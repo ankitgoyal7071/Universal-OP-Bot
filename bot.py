@@ -13,8 +13,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# टोकन सीधे कोड और Environment Variable दोनों से सपोर्ट करेगा
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc")
+# आपका बिल्कुल नया फ्रेश टोकन (All In One OP Levels Bot)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8868136868:AAGcUhj4to9fDi_SsADjDef1vlZt2nfDLM0")
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
@@ -545,7 +545,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with Highlighted Digital Tab & Live Button Timer...")
+    print("Bot is polling live with New Clean Token...")
     app.run_polling()
 
 if __name__ == "__main__":
