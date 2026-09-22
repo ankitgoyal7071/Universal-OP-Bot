@@ -12,7 +12,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
+# आपका नया और ऐक्टिव टोकन
+TELEGRAM_BOT_TOKEN = "8983062859:AAH0l6D3kqC1rVllTYX7tQLFBDOqd8po_lI"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
@@ -21,7 +22,6 @@ CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 # चैनल पर रुकने का अनिवार्य समय (सेकंड में)
 MANDATORY_VISIT_SECONDS = 6
 
-# यूज़र के विज़िट का समय ट्रैक करने के लिए
 USER_VISIT_TIMESTAMPS = {}
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -238,20 +238,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
 
-        # 1. क्या यूज़र अभी भी चैनल का मेंबर है?
+        # 1. क्या यूज़र अभी भी चैनल में है?
         subscribed = await is_user_subscribed(context.bot, user_id)
         if not subscribed:
             await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
             await query.message.reply_text("🔒 बॉट का उपयोग जारी रखने के लिए चैनल जॉइन करें:", reply_markup=get_force_sub_markup())
             return
 
-        # 2. क्या यूज़र ने चैनल पर आवश्यक 6 सेकंड बिताए?
+        # 2. चैनल विज़िट टाइमर चेक (कम से कम 6 सेकंड)
         request_time = USER_VISIT_TIMESTAMPS.get(user_id, 0)
         elapsed = time.time() - request_time
 
         if elapsed < MANDATORY_VISIT_SECONDS and user_id != ADMIN_ID:
             remaining = int(MANDATORY_VISIT_SECONDS - elapsed)
-            # यह यूज़र के फोन स्क्रीन पर पॉपअप अलर्ट दिखाएगा
             await query.answer(
                 f"⚠️ आपने चैनल की पोस्ट नहीं देखी!\nकृपया चैनल पर जाकर {remaining} सेकंड पोस्ट/Ad देखें, फिर बटन दबाएं।", 
                 show_alert=True
@@ -300,7 +299,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # यूज़र के रिक्वेस्ट का टाइम नोट करें
     USER_VISIT_TIMESTAMPS[user_id] = time.time()
 
     visit_markup = InlineKeyboardMarkup([
@@ -322,7 +320,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is running purely with Official Channel flow...")
+    print("Bot is polling live with active token...")
     app.run_polling()
 
 if __name__ == "__main__":
