@@ -38,6 +38,8 @@ SEBI_DISCLAIMER_TEXT = (
     "🔒 <b>Official Channel:</b> @LIVEOPTIONDATA"
 )
 
+MAJOR_INDICES = ["NIFTY", "NIFTY 50", "BANKNIFTY", "BANK NIFTY", "FINNIFTY", "FIN NIFTY", "SENSEX", "MIDCPNIFTY", "MIDCAP NIFTY"]
+
 def load_data(file_path, default_val):
     if os.path.exists(file_path):
         try:
@@ -109,13 +111,12 @@ ALIAS_MAP = {
     "CRUDE OIL": "CL=F",
     "CRUDEOIL": "CL=F",
     "NATURALGAS": "NG=F",
+    "NATURAL GAS": "NG=F",
     "COPPER": "HG=F",
     "BTC": "BTC-USD",
     "ETH": "ETH-USD",
     "SOL": "SOL-USD",
-    "USDINR": "USDINR=X",
-    "GOLDBEES": "GOLDBEES.NS",
-    "SILVERBEES": "SILVERBEES.NS"
+    "USDINR": "USDINR=X"
 }
 
 logging.basicConfig(
@@ -131,15 +132,34 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
         logging.error(f"Force Sub Error: {e}")
         return False
 
-def get_main_keyboard():
-    keyboard = [
+# --- KEYBOARDS & NAVIGATION TABS ---
+
+def get_main_menu_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("📈 Autotrender Tab")],
+        [KeyboardButton("🥇 Commodity Tab"), KeyboardButton("🧮 Lot Size Calculator")],
+        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
+    ], resize_keyboard=True)
+
+def get_op_levels_keyboard():
+    return ReplyKeyboardMarkup([
         [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANK NIFTY")],
         [KeyboardButton("🪙 FIN NIFTY"), KeyboardButton("⚡ SENSEX")],
-        [KeyboardButton("📈 MIDCAP NIFTY"), KeyboardButton("🥇 MCX GOLD")],
-        [KeyboardButton("🧮 Lot Size Calculator"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("📖 How to Use? (गाइड)"), KeyboardButton("📢 Official Channel")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        [KeyboardButton("⚡ MIDCAP NIFTY"), KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_autotrender_menu_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("⏱️ 5-Min Autotrender"), KeyboardButton("⏱️ 15-Min Autotrender")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_commodity_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
+        [KeyboardButton("🛢️ CRUDE OIL"), KeyboardButton("🔥 NATURAL GAS")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
 
 def get_force_sub_markup():
     return InlineKeyboardMarkup([
@@ -230,7 +250,9 @@ def calculate_op_levels(df, symbol):
         targets[f"bt{idx}"] = round(doKdc + (range1 * r))
         targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
-    strikes = calculate_strikes_2percent(current_price, symbol)
+    clean_sym = symbol.upper().strip()
+    is_major_index = any(idx_name in clean_sym for idx_name in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+    strikes = calculate_strikes_2percent(current_price, symbol) if is_major_index else None
     mood = get_market_mood()
 
     return {
@@ -238,6 +260,7 @@ def calculate_op_levels(df, symbol):
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
         "cpr_type": cpr_type,
         "market_mood": mood,
+        "is_major_index": is_major_index,
         "b_above": round(doKdc + (range1 * 0.236)),
         "b_conf": round(doKdc + (range1 * 0.382)),
         "s_below": round(doKdc - (range1 * 0.236)),
@@ -269,11 +292,11 @@ def fetch_data(symbol):
     if sym_u in ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
         df = get_mcx_parity("GOLDMCX")
         return df, "MCX GOLD (10g / INR)"
-    elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER"]:
+    elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER", "🥈 MCX SILVER"]:
         df = get_mcx_parity("SILVERMCX")
         return df, "MCX SILVER (1kg / INR)"
 
-    clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").strip()
+    clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").replace("🥇", "").replace("🥈", "").replace("🔥", "").strip()
     resolved = ALIAS_MAP.get(clean_sym, clean_sym)
     candidates = [resolved]
     if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
@@ -291,7 +314,6 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Exact Nitin Murarka SMC Autotrender Intraday Trend Dashboard Engine
 def generate_autotrender_dashboard(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -307,7 +329,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
     ist = pytz.timezone('Asia/Kolkata')
     today_date = datetime.now(ist).strftime('%Y-%m-%d')
 
-    # Seed initial OI base (in lakhs format jaise Autotrender me hota hai)
     call_oi_base = 5500000
     put_oi_base = 4500000
     
@@ -349,11 +370,9 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
         diff_oi = put_oi - call_oi
         pcr = round(abs(put_oi) / call_oi, 2) if call_oi > 0 else 0.50
 
-        # Signals determination
         opt_sig = "BUY" if diff_oi > 0 and pcr >= 1.0 else "SELL"
         vwap_sig = "BUY" if last_price >= vwap else "SELL"
 
-        # Format row (Exact Autotrender Layout)
         call_fmt = f"{call_oi/100000:,.1f}L"
         put_fmt = f"{put_oi/100000:,.1f}L"
         diff_fmt = f"{diff_oi/100000:,.1f}L"
@@ -363,7 +382,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
         )
         cur_dt += pd.Timedelta(minutes=timeframe_minutes)
 
-    # Autotrender UI Header exactly matching dashboard
     header = (
         f"📊 <b>Dashboard / {clean_sym}</b>\n"
         f"🎯 <b>Tab:</b> <code>Intraday Trend ({timeframe_minutes} mins)</code>\n"
@@ -379,7 +397,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
     return header
 
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
-    st = lvl['strikes']
     out = []
     out.append(f"📊 <b>{matched_symbol} • PRO OP ALGO</b>")
     out.append(f"📅 <code>{today_str}</code>")
@@ -387,10 +404,13 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     out.append(f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>")
     out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
 
-    out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
-    out.append(f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n")
+    # Strike block displays ONLY for Major Indices (Nifty, Bank Nifty, etc.)
+    if lvl.get("is_major_index") and lvl.get("strikes"):
+        st = lvl['strikes']
+        out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
+        out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
+        out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
+        out.append(f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n")
 
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
     out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
@@ -423,13 +443,12 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     out.append("🛡️ <b>ANTI-FAKEOUT CONFIRMATION CHECKLIST:</b>")
     out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append("  1️⃣ Entry tabhi lein jab 15-min candle Confirm level ke upar/niche close kare.")
-    out.append("  2️⃣ Niche diye gaye Autotrender Trend Dashboard se Option Signal & VWAP verify karein.")
+    out.append("  2️⃣ Autotrender Trend Dashboard se Option & VWAP Signals confirm karein.")
     out.append("  3️⃣ No Trade Zone me strict no-trading discipline follow karein.")
 
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
-# Automated Background Loop: Pre-Open (9:08 AM), Levels (9:30 AM), Closing Report (3:45 PM) To Channel
 async def auto_post_scheduler_loop(bot):
     ist = pytz.timezone('Asia/Kolkata')
     last_levels_day = None
@@ -503,16 +522,16 @@ async def auto_post_scheduler_loop(bot):
 async def send_how_to_use(update: Update):
     guide_text = (
         "📖 <b>Universal OP Bot ka उपयोग कैसे करें? / User Guide:</b>\n\n"
-        "<b>1️⃣ सिम्बल चुनें:</b>\n"
-        "नीचे कीबोर्ड से इंडेक्स चुनें (NIFTY, BANK NIFTY, FIN NIFTY, SENSEX, MIDCAP NIFTY).\n\n"
-        "<b>2️⃣ Autotrender Intraday Trend Dashboard:</b>\n"
-        "3m, 5m, 15m बटन दबाकर कॉल OI, पुट OI, Diff, PCR, Price aur VWAP signal ek sath dekhein.\n\n"
-        "<b>3️⃣ 2% स्ट्राइक सेलेक्टर:</b>\n"
-        "बॉट स्पॉट प्राइस का ±2% कैलकुलेट करके सबसे सुरक्षित CE और PE स्ट्राइक अपने आप बताएगा।\n\n"
-        "<b>4️⃣ VIP फास्ट पास:</b>\n"
-        "अपने 3 दोस्तों को बॉट रेफर करें और 30s टाइमर हमेशा के लिए बंद करें! (`👥 VIP Referral Link` दबाएँ)।\n"
-        "<b>5️⃣ रिस्क कैलकुलेटर:</b>\n"
-        "लॉट साइज कैलकुलेट करने के लिए `🧮 Lot Size Calculator` बटन दबाएँ।\n"
+        "<b>1️⃣ 📊 OP Levels Tab:</b>\n"
+        "NIFTY, BANK NIFTY, FIN NIFTY, SENSEX, MIDCAP NIFTY ke algorithmic CPR aur Target levels dekhein.\n\n"
+        "<b>2️⃣ 🎯 ±2% Strike Selector:</b>\n"
+        "Sirf Major Indices me spot price ke ±2% rule se ITM CE aur PE strikes apne aap display hongi.\n\n"
+        "<b>3️⃣ 📈 Autotrender Tab:</b>\n"
+        "5-Min aur 15-Min dashboard se Call OI, Put OI, Difference, PCR, aur VWAP signals track karein.\n\n"
+        "<b>4️⃣ 🥇 Commodity Tab:</b>\n"
+        "MCX Gold, MCX Silver, Crude Oil, aur Natural Gas ke calculation ek jagah paayein.\n\n"
+        "<b>5️⃣ 👥 VIP Fast Pass:</b>\n"
+        "3 dosto ko bot share karke 30s wait timer hamesha ke liye band karein.\n"
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -544,12 +563,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     vip_badge = "👑 <b>VIP Status: ACTIVE (Instant Access)</b>\n" if is_vip_user(user_id) else ""
     msg = (
-        f"👋 <b>Universal OP Bot Pro में आपका स्वागत है!</b>\n\n"
+        f"👋 <b>Universal OP Bot Pro Suite में आपका स्वागत है!</b>\n\n"
         f"{vip_badge}"
-        "लेवल्स देखने के लिए नीचे दिए गए कीबोर्ड से सिम्बल चुनें या नाम टाइप करके भेजें:\n"
+        "नीचे दिए गए Tabs में से चुनें:\n"
+        "• <b>📊 OP Levels Tab:</b> Major Indices Levels\n"
+        "• <b>📈 Autotrender Tab:</b> 5m / 15m Trend & VWAP\n"
+        "• <b>🥇 Commodity Tab:</b> Gold, Silver, Crude Oil\n"
         + SEBI_DISCLAIMER_TEXT
     )
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_keyboard())
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -620,7 +642,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📊 <b>Bot Admin Analytics:</b>\n\n"
         f"👥 कुल एक्टिव यूज़र्स: <b>{len(users)}</b>\n"
-        f"🔗 रेफरल डेटाबेस साइज: <b>{len(refs)} referrers</b>\n"
+        f"🔗 रेफरल डेटाबेस: <b>{len(refs)} referrers</b>\n"
         f"📢 ऑफिशियल चैनल: @LIVEOPTIONDATA", 
         parse_mode="HTML"
     )
@@ -670,9 +692,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if subscribed:
             await query.message.delete()
             await query.message.reply_text(
-                "✅ <b>वेरिफिकेशन सफल!</b>\n\nअब नीचे दिए गए कीबोर्ड से सिम्बल चुनें।" + SEBI_DISCLAIMER_TEXT, 
+                "✅ <b>वेरिफिकेशन सफल!</b>\n\nअब नीचे दिए गए Tabs से शुरू करें।" + SEBI_DISCLAIMER_TEXT, 
                 parse_mode="HTML",
-                reply_markup=get_main_keyboard()
+                reply_markup=get_main_menu_keyboard()
             )
         else:
             await query.message.reply_text(
@@ -689,9 +711,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         table_text = generate_autotrender_dashboard(sym, tf)
         switch_markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ 3 mins", callback_data=f"at_3_{sym}"),
-                InlineKeyboardButton("📊 5 mins", callback_data=f"at_5_{sym}"),
-                InlineKeyboardButton("📈 15 mins", callback_data=f"at_15_{sym}")
+                InlineKeyboardButton("📊 Switch to 5m", callback_data=f"at_5_{sym}"),
+                InlineKeyboardButton("📈 Switch to 15m", callback_data=f"at_15_{sym}")
             ],
             [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]
         ])
@@ -722,14 +743,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
             formatted_msg = format_color_display(matched_symbol, today_str, lvl, symbol)
             
-            dashboard_markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⚡ 3 mins Trend", callback_data=f"at_3_{symbol}"),
-                    InlineKeyboardButton("📊 5 mins Trend", callback_data=f"at_5_{symbol}"),
-                    InlineKeyboardButton("📈 15 mins Trend", callback_data=f"at_15_{symbol}")
-                ],
-                [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]
-            ])
+            buttons = []
+            if lvl.get("is_major_index"):
+                buttons.append([
+                    InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{symbol}"),
+                    InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{symbol}")
+                ])
+            buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
+
+            dashboard_markup = InlineKeyboardMarkup(buttons)
             await status_msg.delete()
             await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=dashboard_markup)
         except Exception as e:
@@ -814,6 +836,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if raw_text.startswith("/"):
         return
 
+    # --- TAB NAVIGATION ROUTING ---
+
+    if raw_text in ["🔙 Main Menu", "MAIN MENU"]:
+        await update.message.reply_text("🏠 <b>Main Menu:</b> कृपया नीचे दिए गए Tabs में से चुनें:", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+        return
+
+    if "OP LEVELS TAB" in raw_text.upper():
+        await update.message.reply_text("📊 <b>OP Levels Tab:</b> इंडेक्स चुनें जिसके लेवल्स देखने हैं:", parse_mode="HTML", reply_markup=get_op_levels_keyboard())
+        return
+
+    if "AUTOTRENDER TAB" in raw_text.upper():
+        await update.message.reply_text("📈 <b>Autotrender Tab:</b> टाइमफ्रेम चुनें (5m या 15m):", parse_mode="HTML", reply_markup=get_autotrender_menu_keyboard())
+        return
+
+    if "COMMODITY TAB" in raw_text.upper():
+        await update.message.reply_text("🥇 <b>Commodity Tab:</b> कमोडिटी चुनें:", parse_mode="HTML", reply_markup=get_commodity_keyboard())
+        return
+
+    if "5-MIN AUTOTRENDER" in raw_text.upper() or "15-MIN AUTOTRENDER" in raw_text.upper():
+        tf = 5 if "5-MIN" in raw_text.upper() else 15
+        pcr_index_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("NIFTY 50", callback_data=f"at_{tf}_NIFTY"), InlineKeyboardButton("BANK NIFTY", callback_data=f"at_{tf}_BANKNIFTY")],
+            [InlineKeyboardButton("FIN NIFTY", callback_data=f"at_{tf}_FINNIFTY"), InlineKeyboardButton("SENSEX", callback_data=f"at_{tf}_SENSEX")],
+            [InlineKeyboardButton("MIDCAP NIFTY", callback_data=f"at_{tf}_MIDCPNIFTY")]
+        ])
+        await update.message.reply_text(f"⏱️ <b>Autotrender {tf}-Min Dashboard:</b> किस इंडेक्स का डेटा देखना चाहते हैं?", parse_mode="HTML", reply_markup=pcr_index_markup)
+        return
+
     if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
         await send_how_to_use(update)
         return
@@ -831,7 +881,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📢 हमारे ऑफिशियल चैनल से जुड़ें:" + SEBI_DISCLAIMER_TEXT, reply_markup=markup, parse_mode="HTML")
         return
 
-    clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🛢️", "").strip().upper()
+    # Clean symbol from keyboard emojis
+    clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip().upper()
 
     subscribed = await is_user_subscribed(context.bot, user_id)
     if not subscribed:
@@ -851,16 +902,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ist = pytz.timezone('Asia/Kolkata')
             today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
             formatted_msg = format_color_display(matched_symbol, today_str, lvl, clean_symbol)
-            dashboard_markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⚡ 3 mins Trend", callback_data=f"at_3_{clean_symbol}"),
-                    InlineKeyboardButton("📊 5 mins Trend", callback_data=f"at_5_{clean_symbol}"),
-                    InlineKeyboardButton("📈 15 mins Trend", callback_data=f"at_15_{clean_symbol}")
-                ],
-                [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]
-            ])
+            
+            buttons = []
+            if lvl.get("is_major_index"):
+                buttons.append([
+                    InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"),
+                    InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol}")
+                ])
+            buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
+            
             await status_msg.delete()
-            await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=dashboard_markup)
+            await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
             return
 
     # Normal User Verification Timer
@@ -896,7 +948,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with Nitin Murarka Autotrender Intraday Trend Dashboard...")
+    print("Bot is polling live with Structured Tabbed Layout & Selective Strikes...")
     app.run_polling()
 
 if __name__ == "__main__":
