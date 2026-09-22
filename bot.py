@@ -87,7 +87,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Universal Pro Bot Suite running healthy with Fixed Timeframe Engine!")
+        self.wfile.write(b"Universal Pro Bot Suite running healthy with Image Engine!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -297,7 +297,6 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Matplotlib HD Image Generator with Independent 5m / 15m Timeframe & Dynamic PCR Logic
 def generate_autotrender_image(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -318,7 +317,6 @@ def generate_autotrender_image(symbol, timeframe_minutes):
     cur_dt = start_dt
     is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym
     
-    # Independent Base values ensuring 5m and 15m output distinct sequences
     multiplier = 1 if timeframe_minutes <= 5 else 3
     call_base = (98000000 if is_nifty else 54450000) * (1.05 if timeframe_minutes > 5 else 0.95)
     put_base = (36500000 if is_nifty else -1960000)
@@ -346,7 +344,6 @@ def generate_autotrender_image(symbol, timeframe_minutes):
 
         call_val = max(10000000, call_val)
         
-        # Dynamic PCR calculation matching screenshot swings (0.25 to 0.53)
         if put_val <= 0:
             pcr = round(max(0.25, 0.45 - (step_count * 0.03)), 2)
         else:
@@ -363,7 +360,6 @@ def generate_autotrender_image(symbol, timeframe_minutes):
 
     table_data = list(reversed(rows[-12:]))
 
-    # Matplotlib Dark Theme High Quality Image
     fig, ax = plt.subplots(figsize=(6, 7), facecolor='#121212', dpi=200)
     ax.set_facecolor('#121212')
     ax.axis('off')
