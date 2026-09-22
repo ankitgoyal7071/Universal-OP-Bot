@@ -7,13 +7,12 @@ import logging
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, time as dtime
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# आपका बिल्कुल नया फ्रेश टोकन (All In One OP Levels Bot)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8868136868:AAGcUhj4to9fDi_SsADjDef1vlZt2nfDLM0")
 ADMIN_ID = 1612210913
 
@@ -21,8 +20,15 @@ CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
 MANDATORY_VISIT_SECONDS = 30
-
 USERS_FILE = "bot_users.json"
+
+NSE_HOLIDAYS = {
+    "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
+    "2026-03-27", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-27", "2026-06-26", "2026-08-15", "2026-09-14",
+    "2026-10-02", "2026-10-20", "2026-11-08", "2026-11-10",
+    "2026-11-24", "2026-12-25"
+}
 
 SEBI_DISCLAIMER_TEXT = (
     "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
@@ -255,17 +261,55 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
+async def auto_post_morning_levels(context: ContextTypes.DEFAULT_TYPE):
+    ist = pytz.timezone('Asia/Kolkata')
+    today_now = datetime.now(ist)
+    today_date_str = today_now.strftime('%Y-%m-%d')
+    today_str = today_now.strftime('%Y-%m-%d %I:%M %p IST')
+    
+    is_weekend = today_now.weekday() >= 5
+    is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
+
+    symbols_to_post = []
+    if not is_nse_holiday:
+        symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
+    
+    symbols_to_post.extend(["BTC", "ETH"])
+
+    for sym in symbols_to_post:
+        try:
+            df, matched_symbol = fetch_data(sym)
+            if df is not None:
+                if sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]:
+                    latest_bar_date = str(df.index[-1].date())
+                    if latest_bar_date != today_date_str:
+                        continue
+
+                lvl = calculate_op_levels(df)
+                msg_content = (
+                    f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
+                    + format_color_display(matched_symbol, today_str, lvl)
+                )
+                await context.bot.send_message(
+                    chat_id=CHANNEL_USERNAME,
+                    text=msg_content,
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(2)
+        except Exception as e:
+            logging.error(f"Error auto-posting levels for {sym}: {e}")
+
 async def send_how_to_use(update: Update):
     guide_text = (
-        "📖 <b>Universal OP Bot का उपयोग कैसे करें? / User Guide:</b>\n\n"
+        "📖 <b>Universal OP Bot ka उपयोग कैसे करें? / User Guide:</b>\n\n"
         "<b>1️⃣ स्टेप 1 (सिम्बल चुनें):</b>\n"
         "नीचे दिए गए कीबोर्ड से इंडेक्स चुनें (उदा. NIFTY 50) या किसी भी शेयर का नाम लिखें।\n\n"
         "<b>2️⃣ स्टेप 2 (चैनल पर जाएँ):</b>\n"
         "<b>'👉 1. Open Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ और लेटेस्ट स्पॉन्सर पोस्ट देखें।\n\n"
-        "<b>3️⃣ स्टेप 3 (30 सेकंड लाइव काउंटडाउन):</b>\n"
-        "बटन और स्क्रीन दोनों पर लाइव हाईलाइटेड डिजिटल काउंटडाउन बॉक्स दिखेगा (30s ➔ 20s ➔ 10s ➔ 0s)।\n\n"
+        "<b>3️⃣ स्टेप 3 (लाइव बिग काउंटडाउन):</b>\n"
+        "स्क्रीन पर बड़ा डिजिटल टाइमर बॉक्स चलेगा (30s से 0s तक)।\n\n"
         "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
-        "30 सेकंड पूरे होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन प्रकट होगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
+        "समय पूरा होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन आएगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -314,9 +358,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "⚠️ <b>उपयोग का तरीका (Usage):</b>\n"
-            "<code>/broadcast आपका प्रचार संदेश यहाँ लिखें</code>\n\n"
-            "उदाहरण:\n"
-            "<code>/broadcast 📢 आज का जैकपॉट ऑप्शन ट्रेड चैनल पर दिया गया है!</code>", 
+            "<code>/broadcast आपका प्रचार संदेश यहाँ लिखें</code>", 
             parse_mode="HTML"
         )
         return
@@ -417,136 +459,43 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error delivering level: {e}")
             await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। / Error calculating levels." + SEBI_DISCLAIMER_TEXT)
 
-async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
-    """हाईलाइटेड डिजिटल बॉक्स और बटन लाइव टाइमर के साथ काउंटडाउन"""
-    intervals = [
-        (10, 20, "🟧🟧⬛⬛⬛", "👉 1. Open Channel & View Ad (20s)"),
-        (10, 10, "🟩🟩🟩⬛⬛", "👉 1. Open Channel & View Ad (10s)"),
-        (10, 0,  "🟩🟩🟩🟩🟩", "✅ Verification Completed!")
-    ]
+# बड़ा डिजिटल क्लॉक कार्ड जनरेटर
+def make_big_timer_box(sec_left):
+    total = 30
+    filled = int(((total - sec_left) / total) * 10)
+    bar = "■" * filled + "□" * (10 - filled)
+    
+    return (
+        f"╔══════════════════════════════════════╗\n"
+        f"║     ⏳ SPONSOR AD VERIFICATION       ║\n"
+        f"╠══════════════════════════════════════╣\n"
+        f"║                                      ║\n"
+        f"║   ⏱️ TIME REMAINING :  [ {sec_left:02d}s ]       ║\n"
+        f"║                                      ║\n"
+        f"║   📊 PROGRESS : [{bar}]     ║\n"
+        f"║   ⚡ STATUS   : VERIFYING VISIT...    ║\n"
+        f"║                                      ║\n"
+        f"╚══════════════════════════════════════╝"
+    )
 
-    for wait_time, remaining, bar, btn_title in intervals:
-        await asyncio.sleep(wait_time)
-        if remaining > 0:
-            highlighted_box = (
-                f"┌──────────────────────────────┐\n"
-                f"│   ⏳ AD VERIFICATION TAB    │\n"
-                f"├──────────────────────────────┤\n"
-                f"│ TIME LEFT : {remaining:02d} SECONDS        │\n"
-                f"│ PROGRESS  : {bar}          │\n"
-                f"│ STATUS    : VIEWING CHANNEL  │\n"
-                f"└──────────────────────────────┘"
-            )
+# स्मूथ बिग टाइमर (हर 3 सेकंड पर लाइव अपडेट - टेलीग्राम सेफ)
+async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
+    for sec_left in range(27, -1, -3):
+        await asyncio.sleep(3)
+        if sec_left > 0:
+            box = make_big_timer_box(sec_left)
             msg_text = (
-                f"📊 <b>{query_symbol} OP LEVLES • PENDING UNLOCK</b>\n\n"
-                f"<pre>{highlighted_box}</pre>\n"
-                f"👉 <b>निर्देश:</b> नीचे दिए गए बटन पर टैप करके हमारे चैनल पर जाएँ और प्रायोजित विज्ञापन/पोस्ट देखें।\n"
-                f"<i>Stay on the channel to complete verification.</i>"
+                f"📊 <b>{query_symbol} OP LEVELES • VERIFICATION IN PROGRESS</b>\n\n"
+                f"<pre>{box}</pre>\n"
+                f"👉 <b>निर्देश:</b> नीचे दिए गए बटन से चैनल पर जाएँ और स्पॉन्सर पोस्ट देखें।\n"
+                f"<i>Stay on the channel until countdown reaches 00s.</i>"
                 + SEBI_DISCLAIMER_TEXT
             )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_title, url=CHANNEL_LINK)]])
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"👉 1. Open Channel & View Ad ({sec_left:02d}s)", url=CHANNEL_LINK)]])
             try:
                 await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text, parse_mode="HTML", reply_markup=markup)
             except Exception:
                 pass
 
     unlocked_box = (
-        f"┌──────────────────────────────┐\n"
-        f"│   ✅ VERIFICATION COMPLETE   │\n"
-        f"├──────────────────────────────┤\n"
-        f"│ STATUS   : 100% SUCCESS      │\n"
-        f"│ ACCESS   : LEVELS UNLOCKED   │\n"
-        f"└──────────────────────────────┘"
-    )
-    final_text = (
-        f"🎉 <b>{query_symbol} • ACCESS GRANTED!</b>\n\n"
-        f"<pre>{unlocked_box}</pre>\n"
-        f"आपका 30 सेकंड का विज़िट समय पूरा हो चुका है।\n\n"
-        f"👇 नीचे दिए गए <b>'Get Levels'</b> बटन पर तुरंत टैप करें:"
-        + SEBI_DISCLAIMER_TEXT
-    )
-    unlocked_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🚀 2. GET LEVELS NOW (Unlocked 🎉)", callback_data=f"lvl_{query_symbol}")]
-    ])
-    
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=final_text,
-            parse_mode="HTML",
-            reply_markup=unlocked_markup
-        )
-    except Exception as e:
-        logging.error(f"Error updating message after delay: {e}")
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    save_user(user_id)
-    raw_text = update.message.text.strip()
-
-    if raw_text.startswith("/"):
-        return
-
-    if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
-        await send_how_to_use(update)
-        return
-
-    if "OFFICIAL CHANNEL" in raw_text.upper():
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
-        await update.message.reply_text("📢 हमारे ऑफिशियल चैनल से जुड़ें जहाँ डेली मार्केट अपडेट्स और लाइव ऑप्शन डेटा मिलता है:" + SEBI_DISCLAIMER_TEXT, reply_markup=markup, parse_mode="HTML")
-        return
-
-    clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🛢️", "").strip().upper()
-
-    subscribed = await is_user_subscribed(context.bot, user_id)
-    if not subscribed:
-        await update.message.reply_text(
-            "🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।\n"
-            "<i>Please join our channel to access levels.</i>" + SEBI_DISCLAIMER_TEXT, 
-            parse_mode="HTML", 
-            reply_markup=get_force_sub_markup()
-        )
-        return
-
-    start_box = (
-        f"┌──────────────────────────────┐\n"
-        f"│   ⏳ AD VERIFICATION TAB    │\n"
-        f"├──────────────────────────────┤\n"
-        f"│ TIME LEFT : 30 SECONDS        │\n"
-        f"│ PROGRESS  : ⬛⬛⬛⬛⬛          │\n"
-        f"│ STATUS    : STARTING VISIT   │\n"
-        f"└──────────────────────────────┘"
-    )
-    initial_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 1. Open Channel & View Ad (30s)", url=CHANNEL_LINK)]
-    ])
-
-    sent_msg = await update.message.reply_text(
-        f"📊 <b>{clean_symbol} OP LEVELS • PENDING UNLOCK</b>\n\n"
-        f"<pre>{start_box}</pre>\n"
-        f"👉 <b>निर्देश:</b> नीचे दिए गए बटन पर टैप करके हमारे चैनल पर जाएँ और प्रायोजित विज्ञापन देखें।\n"
-        f"<i>Stay on the channel for 30 seconds to unlock levels.</i>"
-        + SEBI_DISCLAIMER_TEXT,
-        parse_mode="HTML",
-        reply_markup=initial_markup
-    )
-
-    asyncio.create_task(live_countdown_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, clean_symbol))
-
-def main():
-    threading.Thread(target=run_web_server, daemon=True).start()
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    
-    print("Bot is polling live with New Clean Token...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+        f"╔═══
