@@ -167,27 +167,27 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(f"📅 <code>{today_str}</code>\n")
 
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
-    out.append("<code>" + "-"*30 + "</code>")
+    out.append("<code>------------------------------</code>")
     out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
     out.append(f"  P  (Central Pivot): <b>{lvl['pivot']}</b>")
     out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
     out.append(f"  Expected Range    : <b>{lvl['range']}</b>\n")
 
     out.append("🟢 <b>BUYING ZONE (BULLISH)</b>")
-    out.append("<code>" + "-"*30 + "</code>")
+    out.append("<code>------------------------------</code>")
     out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
     out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b>")
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
     out.append("")
 
-    out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND / CHOPPY)</b>")
-    out.append("<code>" + "-"*30 + "</code>")
+    out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>")
+    out.append("<code>------------------------------</code>")
     out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
     out.append("  <i>(Strictly avoid new intraday positions here)</i>\n")
 
     out.append("🔴 <b>SELLING ZONE (BEARISH)</b>")
-    out.append("<code>" + "-"*30 + "</code>")
+    out.append("<code>------------------------------</code>")
     out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
     out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b>")
     for i in range(1, 11):
@@ -209,38 +209,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         "👋 <b>Universal OP Bot में आपका स्वागत है!</b>\n\n"
-        "लेवल्स देखने के लिए सिम्बल का नाम भेजें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>, <code>RELIANCE</code>)."
+        "लेवल्स देखने के लिए सिम्बल का नाम भेजें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>)."
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
-
-async def deliver_levels(chat_id: int, symbol: str, context: ContextTypes.DEFAULT_TYPE):
-    progress_msg = await context.bot.send_message(
-        chat_id=chat_id, 
-        text=f"⏳ Calculating OP levels for <b>{symbol.upper()}</b>...", 
-        parse_mode="HTML"
-    )
-    
-    df, matched_symbol = fetch_data(symbol)
-    if df is None:
-        await progress_msg.edit_text(
-            f"❌ <b>'{symbol.upper()}'</b> का डेटा नहीं मिला।\n\n"
-            "कृपया सही सिम्बल लिखें, जैसे:\n"
-            "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>FINNIFTY</code>\n"
-            "• <code>GOLDMCX</code>, <code>SILVERMCX</code>, <code>CRUDEOIL</code>\n"
-            "• <code>RELIANCE</code>, <code>TCS</code>, <code>SBIN</code>",
-            parse_mode="HTML"
-        )
-        return
-
-    lvl = calculate_op_levels(df)
-    ist = pytz.timezone('Asia/Kolkata')
-    today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-    formatted_msg = format_color_display(matched_symbol, today_str, lvl)
-    
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
-    await progress_msg.delete()
-    await context.bot.send_message(chat_id=chat_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -259,7 +231,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
         await query.message.delete()
-        await deliver_levels(user_id, symbol, context)
+        
+        # यूज़र को तुरंत प्रोग्रेस मैसेज भेजना
+        status_msg = await context.bot.send_message(
+            chat_id=user_id, 
+            text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं, कृपया 2 सेकंड प्रतीक्षा करें...", 
+            parse_mode="HTML"
+        )
+        
+        try:
+            df, matched_symbol = fetch_data(symbol)
+            if df is None:
+                await status_msg.edit_text(
+                    f"❌ <b>'{symbol}'</b> का डेटा नहीं मिला।\n\n"
+                    "कृपया सही सिम्बल लिखें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>, <code>RELIANCE</code>).",
+                    parse_mode="HTML"
+                )
+                return
+
+            lvl = calculate_op_levels(df)
+            ist = pytz.timezone('Asia/Kolkata')
+            today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
+            formatted_msg = format_color_display(matched_symbol, today_str, lvl)
+            
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
+            await status_msg.delete()
+            await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
+        except Exception as e:
+            logging.error(f"Error delivering level: {e}")
+            await status_msg.edit_text("❌ लेवल्स निकालने में कोई तकनीकी समस्या आई। कृपया थोड़ी देर बाद पुनः प्रयास करें।")
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -272,7 +272,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # सिम्बल को सीधे बटन के callback_data में डाल दिया
     visit_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
         [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data=f"lvl_{query}")]
@@ -280,7 +279,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        "लेवल्स तुरंत अनलॉक करने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
+        "लेवल्स तुरंत पाने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=visit_markup)
 
