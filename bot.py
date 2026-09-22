@@ -7,7 +7,7 @@ import logging
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, time as dtime
+from datetime import datetime
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -261,43 +261,50 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
-async def auto_post_morning_levels(context: ContextTypes.DEFAULT_TYPE):
+# 100% Reliable Native Async Loop for 9:30 AM Auto-Posting
+async def auto_post_scheduler_loop(bot):
     ist = pytz.timezone('Asia/Kolkata')
-    today_now = datetime.now(ist)
-    today_date_str = today_now.strftime('%Y-%m-%d')
-    today_str = today_now.strftime('%Y-%m-%d %I:%M %p IST')
-    
-    is_weekend = today_now.weekday() >= 5
-    is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
+    last_posted_day = None
 
-    symbols_to_post = []
-    if not is_nse_holiday:
-        symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
-    
-    symbols_to_post.extend(["BTC", "ETH"])
-
-    for sym in symbols_to_post:
+    while True:
         try:
-            df, matched_symbol = fetch_data(sym)
-            if df is not None:
-                if sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]:
-                    latest_bar_date = str(df.index[-1].date())
-                    if latest_bar_date != today_date_str:
-                        continue
+            now_ist = datetime.now(ist)
+            today_date_str = now_ist.strftime('%Y-%m-%d')
+            
+            # Subah 9:30 AM IST check (9:30 to 9:31 ke beech)
+            if now_ist.hour == 9 and now_ist.minute == 30 and last_posted_day != today_date_str:
+                last_posted_day = today_date_str
+                is_weekend = now_ist.weekday() >= 5
+                is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
+                today_str = now_ist.strftime('%Y-%m-%d %I:%M %p IST')
 
-                lvl = calculate_op_levels(df)
-                msg_content = (
-                    f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
-                    + format_color_display(matched_symbol, today_str, lvl)
-                )
-                await context.bot.send_message(
-                    chat_id=CHANNEL_USERNAME,
-                    text=msg_content,
-                    parse_mode="HTML"
-                )
-                await asyncio.sleep(2)
+                symbols_to_post = []
+                if not is_nse_holiday:
+                    symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
+                symbols_to_post.extend(["BTC", "ETH"])
+
+                for sym in symbols_to_post:
+                    try:
+                        df, matched_symbol = fetch_data(sym)
+                        if df is not None:
+                            lvl = calculate_op_levels(df)
+                            msg_content = (
+                                f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
+                                + format_color_display(matched_symbol, today_str, lvl)
+                            )
+                            await bot.send_message(
+                                chat_id=CHANNEL_USERNAME,
+                                text=msg_content,
+                                parse_mode="HTML"
+                            )
+                            await asyncio.sleep(2)
+                    except Exception as e:
+                        logging.error(f"Error auto-posting {sym}: {e}")
+
+            await asyncio.sleep(30)
         except Exception as e:
-            logging.error(f"Error auto-posting levels for {sym}: {e}")
+            logging.error(f"Error in scheduler loop: {e}")
+            await asyncio.sleep(30)
 
 async def send_how_to_use(update: Update):
     guide_text = (
@@ -459,7 +466,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error delivering level: {e}")
             await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। / Error calculating levels." + SEBI_DISCLAIMER_TEXT)
 
-# बड़ा डिजिटल क्लॉक कार्ड जनरेटर
 def make_big_timer_box(sec_left):
     total = 30
     filled = int(((total - sec_left) / total) * 10)
@@ -478,7 +484,6 @@ def make_big_timer_box(sec_left):
         f"╚══════════════════════════════════════╝"
     )
 
-# स्मूथ बिग टाइमर (हर 3 सेकंड पर लाइव अपडेट - टेलीग्राम सेफ)
 async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
     for sec_left in range(27, -1, -3):
         await asyncio.sleep(3)
@@ -489,13 +494,4 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
                 f"<pre>{box}</pre>\n"
                 f"👉 <b>निर्देश:</b> नीचे दिए गए बटन से चैनल पर जाएँ और स्पॉन्सर पोस्ट देखें।\n"
                 f"<i>Stay on the channel until countdown reaches 00s.</i>"
-                + SEBI_DISCLAIMER_TEXT
-            )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"👉 1. Open Channel & View Ad ({sec_left:02d}s)", url=CHANNEL_LINK)]])
-            try:
-                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text, parse_mode="HTML", reply_markup=markup)
-            except Exception:
-                pass
-
-    unlocked_box = (
-        f"╔═══
+                + SEBI_DISCLAIMER
