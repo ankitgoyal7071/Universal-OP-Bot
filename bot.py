@@ -223,7 +223,7 @@ def format_color_display(matched_symbol, today_str, lvl):
 
     return "\n".join(out)
 
-# --- Admin Key Generator ---
+# --- Admin Key Generator & Manager ---
 
 async def genkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -236,10 +236,9 @@ async def genkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         days = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Days ek number hona chahiye (jaise: 1, 7, 15, 30, 120, 180, 365).")
+        await update.message.reply_text("Days number hona chahiye.")
         return
     
-    # Generate random unique code
     random_str = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
     key_code = f"OP-{days}D-{random_str}"
     
@@ -254,31 +253,109 @@ async def genkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎟️ <b>New License Key Generated!</b>\n\n"
         f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
         f"⏳ <b>Validity:</b> {days} Din\n\n"
-        f"User ko yeh message forward karein:\n"
-        f"<i>Bot ko start karke yeh command bhejein:</i>\n"
+        f"User ko forward karein:\n"
         f"<code>/redeem {key_code}</code>"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
+
+async def delkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Format: <code>/delkey &lt;KEY_CODE&gt;</code>\nExample: <code>/delkey OP-30D-XXXXXX</code>", parse_mode="HTML")
+        return
+    
+    target_key = context.args[0].strip().upper()
+    keys = load_data(KEYS_FILE)
+    
+    if target_key in keys:
+        del keys[target_key]
+        save_data(KEYS_FILE, keys)
+        await update.message.reply_text(f"🗑️ License key <code>{target_key}</code> delete/cancel kar di gayi hai.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ Yeh key database me nahi mili ya pehle hi redeem ho chuki hai.")
+
+async def deluser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Format: <code>/deluser &lt;USER_ID&gt;</code>", parse_mode="HTML")
+        return
+    
+    target_uid = context.args[0].strip()
+    users = load_data(USERS_FILE)
+    
+    if target_uid in users:
+        del users[target_uid]
+        save_data(USERS_FILE, users)
+        await update.message.reply_text(f"🚫 User <code>{target_uid}</code> ka subscription revoke/delete kar diya gaya hai.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ Yeh user ID database me nahi mili.")
+
+async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    users = load_data(USERS_FILE)
+    if not users:
+        await update.message.reply_text("Abhi koi registered users nahi hain.", parse_mode="HTML")
+        return
+    
+    lines = ["👥 <b>REGISTERED SUBSCRIBERS</b>\n"]
+    now = datetime.now()
+
+    for uid, data in users.items():
+        uname = data.get("username", "N/A")
+        exp_str = data.get("expiry", "Unknown")
+        try:
+            exp_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
+            if now > exp_dt:
+                status = "🔴 Expired"
+            else:
+                left = (exp_dt - now).days
+                status = f"🟢 Active ({left}d left)"
+        except Exception:
+            status = "⚪ Unknown"
+        
+        lines.append(f"• <b>@{uname}</b> (<code>{uid}</code>)\n  Status: {status} | Expiry: <code>{exp_str}</code>\n")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+async def keys_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    keys = load_data(KEYS_FILE)
+    if not keys:
+        await update.message.reply_text("Koi unused keys nahi hain.", parse_mode="HTML")
+        return
+    
+    lines = ["🎟️ <b>AVAILABLE UNREDEEMED KEYS</b>\n"]
+    for k, v in keys.items():
+        lines.append(f"• <code>{k}</code> — <b>{v.get('days')} Din</b> (Created: {v.get('created_at')})")
+    
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 # --- User Key Redeem ---
 
 async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if not context.args:
-        await update.message.reply_text("Format: <code>/redeem &lt;KEY_CODE&gt;</code>\nExample: <code>/redeem OP-30D-ABC123</code>", parse_mode="HTML")
+        await update.message.reply_text("Format: <code>/redeem &lt;KEY_CODE&gt;</code>", parse_mode="HTML")
         return
 
     input_key = context.args[0].strip().upper()
     keys = load_data(KEYS_FILE)
 
     if input_key not in keys:
-        await update.message.reply_text("❌ Galat ya expired license key. Kripya Admin se fresh key lein.", parse_mode="HTML")
+        await update.message.reply_text("❌ Galat ya expired license key.", parse_mode="HTML")
         return
 
     days = keys[input_key]["days"]
     users = load_data(USERS_FILE)
 
-    # Expiry calculation (agar pehle se plan active hai toh aage extend ho jayega)
     now = datetime.now()
     if uid in users and "expiry" in users[uid]:
         try:
@@ -297,7 +374,6 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     save_data(USERS_FILE, users)
 
-    # Key delete kar dein taaki dobara use na ho
     del keys[input_key]
     save_data(KEYS_FILE, keys)
 
@@ -305,7 +381,7 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎉 <b>License Activated Successfully!</b>\n\n"
         f"⏳ <b>Added:</b> {days} Din\n"
         f"📅 <b>Expiry:</b> <code>{new_expiry.strftime('%Y-%m-%d %I:%M %p')}</code>\n\n"
-        f"Ab aap kisi bhi stock/commodity ka naam bhej kar levels calculate kar sakte hain!"
+        f"Ab aap kisi bhi stock/commodity ka naam bhej kar levels dekh sakte hain!"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -315,7 +391,7 @@ async def myplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if has_access:
         await update.message.reply_text(f"✅ <b>Subscription Status:</b> Active\n⏳ Validity: <code>{info}</code>", parse_mode="HTML")
     else:
-        await update.message.reply_text("❌ <b>Subscription Inactive</b>\nLicense key redeem karne ke liye: <code>/redeem KEY</code>\nKey pane ke liye Admin se contact karein.", parse_mode="HTML")
+        await update.message.reply_text("❌ <b>Subscription Inactive</b>\nRedeem karne ke liye: <code>/redeem KEY</code>", parse_mode="HTML")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -325,9 +401,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "🔒 <b>Universal OP Calculator Bot (Private)</b>\n\n"
             "Aapka subscription active nahi hai.\n\n"
-            "Agar aapke paas License Key hai toh activate karne ke liye type karein:\n"
+            "Key activate karne ke liye type karein:\n"
             "👉 <code>/redeem KEY_CODE</code>\n\n"
-            "Nayi key khareedne ya trial ke liye Admin se contact karein."
+            "Access key lene ke liye Admin se contact karein."
         )
         await update.message.reply_text(msg, parse_mode="HTML")
         return
@@ -340,7 +416,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
         "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
         "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>\n\n"
-        "Plan validity check karne ke liye: /myplan"
+        "Plan validity: /myplan"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -377,10 +453,17 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # User Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("myplan", myplan_cmd))
     app.add_handler(CommandHandler("redeem", redeem_cmd))
+    
+    # Admin Key & User Controls
     app.add_handler(CommandHandler("genkey", genkey_cmd))
+    app.add_handler(CommandHandler("delkey", delkey_cmd))
+    app.add_handler(CommandHandler("keys", keys_cmd))
+    app.add_handler(CommandHandler("users", users_cmd))
+    app.add_handler(CommandHandler("deluser", deluser_cmd))
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     print("Bot is polling live...")
