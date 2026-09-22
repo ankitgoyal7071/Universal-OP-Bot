@@ -14,14 +14,11 @@ from telegram.error import TelegramError
 TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
 ADMIN_ID = 1612210913
 
-# आपका चैनल यूजरनेम और लिंक
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# पेन्डिंग सिम्बल रिक्वेस्ट्स (हर बार विज़िट करवाने के लिए)
 PENDING_REQUESTS = {}
 
-# Dummy Web Server for Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -205,8 +202,6 @@ def format_color_display(matched_symbol, today_str, lvl):
 
     return "\n".join(out)
 
-# --- Handlers ---
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     subscribed = await is_user_subscribed(context.bot, user_id)
@@ -269,23 +264,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.startswith("/"):
         return
 
-    # 1. क्या यूजर चैनल का मेंबर है?
     subscribed = await is_user_subscribed(context.bot, user_id)
     if not subscribed:
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # 2. एडमिन के लिए डायरेक्ट, बाकी यूज़र्स के लिए हर बार चैनल विज़िट अनिवार्य
     if user_id == ADMIN_ID:
         await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query}</b>...", parse_mode="HTML")
         await send_calculated_level(user_id, query, context)
         return
 
-    # सिम्बल को सेव करें और चैनल पर विज़िट करने का बटन भेजें
     PENDING_REQUESTS[user_id] = query
     msg = (
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        "लेवल्स तुरंत अनलॉक करने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
+        "लेवल्स तुरंत पाने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_channel_visit_markup())
 
@@ -302,28 +294,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-ytz.timezone('Asia/Kolkata')
-    today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-    formatted_msg = format_color_display(matched_symbol, today_str, lvl)
     
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
-    await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=markup)
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip()
-    if not query.startswith("/"):
-        await process_ticker(update, context, query)
-
-def main():
-    threading.Thread(target=run_web_server, daemon=True).start()
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CallbackQueryHandler(check_joined_callback, pattern="^check_joined$"))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    
-    print("Bot is polling live with Force-Sub enabled...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
