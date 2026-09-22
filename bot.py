@@ -132,8 +132,6 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
         logging.error(f"Force Sub Error: {e}")
         return False
 
-# --- KEYBOARDS & NAVIGATION TABS ---
-
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("📈 Autotrender Tab")],
@@ -169,25 +167,14 @@ def get_force_sub_markup():
 
 def calculate_strikes_2percent(spot_price, symbol):
     sym_u = symbol.upper()
-    if "BANK" in sym_u or "SENSEX" in sym_u:
-        step = 100
-    else:
-        step = 50
-
+    step = 100 if ("BANK" in sym_u or "SENSEX" in sym_u) else 50
     call_raw = spot_price - (spot_price * 0.02)
     put_raw = spot_price + (spot_price * 0.02)
-
-    call_strike_1 = round(call_raw / step) * step
-    call_strike_2 = call_strike_1 + step
-
-    put_strike_1 = round(put_raw / step) * step
-    put_strike_2 = put_strike_1 - step
-
     return {
-        "call_1": int(call_strike_1),
-        "call_2": int(call_strike_2),
-        "put_1": int(put_strike_1),
-        "put_2": int(put_strike_2)
+        "call_1": int(round(call_raw / step) * step),
+        "call_2": int((round(call_raw / step) * step) + step),
+        "put_1": int(round(put_raw / step) * step),
+        "put_2": int((round(put_raw / step) * step) - step)
     }
 
 def get_market_mood():
@@ -196,11 +183,11 @@ def get_market_mood():
         if not vix_df.empty:
             vix_val = round(float(vix_df['Close'].iloc[-1]), 2)
             if vix_val < 13:
-                return f"{vix_val} (Low Volatility / Sideways Decay Zone ⚠️)"
+                return f"{vix_val} (Low Volatility / Sideways Decay ⚠️)"
             elif vix_val <= 18:
-                return f"{vix_val} (Ideal Balanced Volatility / Good Swings 🟢)"
+                return f"{vix_val} (Balanced Volatility / Swings 🟢)"
             else:
-                return f"{vix_val} (High Volatility / Fast Momentum Breakouts ⚡)"
+                return f"{vix_val} (High Volatility / Breakouts ⚡)"
     except Exception:
         pass
     return "14.20 (Balanced Swing Mode 🟢)"
@@ -219,11 +206,7 @@ def calculate_op_levels(df, symbol):
     volatility0 = np.sqrt(max(0, sq_sum0 - (avg_logg0**2)))
     range11 = round(dc * volatility0)
 
-    if abs(dop - dc) > (0.382 * range11):
-        doKdc = dop
-    else:
-        doKdc = dc
-
+    doKdc = dop if abs(dop - dc) > (0.382 * range11) else dc
     logg = np.log(doKdc / closes[-2])
     adjusted_logs = [logg] + log_returns[:-1]
     avg_logg = sum(adjusted_logs) / 10.0
@@ -238,11 +221,11 @@ def calculate_op_levels(df, symbol):
     cpr_width = abs(tc - bc)
     cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
     if cpr_percent < 0.25:
-        cpr_type = "⚡ Narrow CPR (Trending Day Expected - Ideal for Buying)"
+        cpr_type = "⚡ Narrow CPR (Trending Day Expected)"
     elif cpr_percent > 0.65:
-        cpr_type = "⚠️ Wide CPR (Rangebound Day - Avoid Fresh Option Buying)"
+        cpr_type = "⚠️ Wide CPR (Rangebound Day)"
     else:
-        cpr_type = "⚖️ Normal CPR (Moderate Trending Day)"
+        cpr_type = "⚖️ Normal CPR (Moderate Day)"
 
     targets = {}
     ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
@@ -251,15 +234,14 @@ def calculate_op_levels(df, symbol):
         targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
     clean_sym = symbol.upper().strip()
-    is_major_index = any(idx_name in clean_sym for idx_name in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+    is_major_index = any(x in clean_sym for x in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
     strikes = calculate_strikes_2percent(current_price, symbol) if is_major_index else None
-    mood = get_market_mood()
 
     return {
         "current_price": current_price,
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
         "cpr_type": cpr_type,
-        "market_mood": mood,
+        "market_mood": get_market_mood(),
         "is_major_index": is_major_index,
         "b_above": round(doKdc + (range1 * 0.236)),
         "b_conf": round(doKdc + (range1 * 0.382)),
@@ -273,13 +255,10 @@ def get_mcx_parity(symbol_name):
     target_ticker = "GC=F" if symbol_name == "GOLDMCX" else "SI=F"
     df_com = yf.Ticker(target_ticker).history(period="1mo", interval="1d")
     df_fx = yf.Ticker("USDINR=X").history(period="1mo", interval="1d")
-
     if df_com.empty or df_fx.empty:
         return None
-
     fx = float(df_fx['Close'].iloc[-1])
     multiplier = (10.0 / 31.1035) * fx * 1.06 if symbol_name == "GOLDMCX" else (1000.0 / 31.1035) * fx * 1.06
-
     res = pd.DataFrame(index=df_com.index)
     res['Open'] = df_com['Open'] * multiplier
     res['High'] = df_com['High'] * multiplier
@@ -290,11 +269,9 @@ def get_mcx_parity(symbol_name):
 def fetch_data(symbol):
     sym_u = symbol.upper().strip()
     if sym_u in ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
-        df = get_mcx_parity("GOLDMCX")
-        return df, "MCX GOLD (10g / INR)"
+        return get_mcx_parity("GOLDMCX"), "MCX GOLD (10g / INR)"
     elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER", "🥈 MCX SILVER"]:
-        df = get_mcx_parity("SILVERMCX")
-        return df, "MCX SILVER (1kg / INR)"
+        return get_mcx_parity("SILVERMCX"), "MCX SILVER (1kg / INR)"
 
     clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").replace("🥇", "").replace("🥈", "").replace("🔥", "").strip()
     resolved = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -314,11 +291,9 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Exact Nitin Murarka SMC Autotrender Intraday Trend (Matching Nifty / Sensex Crores Units & 0.25 - 0.53 PCR)
 def generate_autotrender_dashboard(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
-
     interval_str = "5m" if timeframe_minutes <= 5 else "15m"
     try:
         df_intra = yf.Ticker(resolved_sym).history(period="1d", interval=interval_str)
@@ -329,20 +304,13 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
 
     ist = pytz.timezone('Asia/Kolkata')
     today_date = datetime.now(ist).strftime('%Y-%m-%d')
-
     rows = []
     start_dt = datetime.strptime(f"{today_date} 09:30", '%Y-%m-%d %H:%M')
     end_dt = datetime.strptime(f"{today_date} 15:15", '%Y-%m-%d %H:%M')
 
     cur_dt = start_dt
-    cum_pv = 0.0
-    cum_vol = 0.0
-    
-    # Scale exactly to Nifty Crores (Cr) vs Sensex Crores
+    cum_pv, cum_vol = 0.0, 0.0
     is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym
-    last_price = 23350.0 if is_nifty else (74710.0 if "SENSEX" in clean_sym else 51200.0)
-    
-    # Base figures in Crores scale (matching reference screenshots)
     call_oi_cur = 188000000 if is_nifty else 75000000
     put_oi_cur = 71000000 if is_nifty else 3800000
 
@@ -362,8 +330,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
             cum_vol += vol
             vwap = round(cum_pv / cum_vol, 0)
             delta = float(matched_bar['Close']) - float(matched_bar['Open'])
-            
-            # Autotrender Formula Dynamic Simulation
             if delta <= 0:
                 call_oi_cur += int(abs(delta) * 125000)
                 put_oi_cur -= int(abs(delta) * 95000)
@@ -374,29 +340,23 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
             seed = int(np.sin(cur_dt.minute) * 450000)
             call_oi_cur += (350000 + seed)
             put_oi_cur += (-150000 - seed)
+            last_price = 23350.0
             vwap = round(last_price + 6.0, 0)
 
-        # Autotrender Exact PCR Calculation
         pcr = round(max(1000000, put_oi_cur) / max(1000000, call_oi_cur), 2)
-        pcr = max(0.25, min(0.65, pcr)) if is_nifty else max(0.01, min(0.15, pcr))
+        pcr = max(0.25, min(0.53, pcr)) if is_nifty else max(0.01, min(0.15, pcr))
 
         opt_sig = "BUY" if pcr >= 1.0 else "SELL"
         vwap_sig = "BUY" if last_price >= vwap else "SELL"
 
-        # Unit formatting in Crores (Cr)
         call_fmt = f"{call_oi_cur/10000000:.2f}Cr"
         put_fmt = f"{put_oi_cur/10000000:.2f}Cr"
 
-        # Clean compact table row (strictly 48 chars wide - no wrap on mobile)
-        rows.append(
-            f"{time_label}│{call_fmt:>7}│{put_fmt:>7}│{pcr:>4.2f}│{opt_sig:<4}│{int(last_price):>5}│{vwap_sig}"
-        )
+        rows.append(f"{time_label}│{call_fmt:>7}│{put_fmt:>7}│{pcr:>4.2f}│{opt_sig:<4}│{int(last_price):>5}│{vwap_sig}")
         cur_dt += pd.Timedelta(minutes=timeframe_minutes)
 
-    # Sort descending: newest times (15:15, 15:00...) at the top like Autotrender
     display_rows = list(reversed(rows[-12:]))
-
-    header = (
+    return (
         f"📊 <b>Dashboard / {clean_sym}</b>\n"
         f"🎯 <b>Intraday Trend ({timeframe_minutes} mins)</b>\n"
         f"📅 <code>{today_date} • Nitin Murarka SMC Model</code>\n\n"
@@ -408,58 +368,59 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
         f"💡 <b>Autotrender Rule:</b> <code>PCR &lt; 0.80</code> & <code>Opt = SELL</code> means Extreme Bearish!"
         + SEBI_DISCLAIMER_TEXT
     )
-    return header
 
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
-    out = []
-    out.append(f"📊 <b>{matched_symbol} • PRO OP ALGO</b>")
-    out.append(f"📅 <code>{today_str}</code>")
-    out.append(f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>")
-    out.append(f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>")
-    out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
-
+    out = [
+        f"📊 <b>{matched_symbol} • PRO OP ALGO</b>",
+        f"📅 <code>{today_str}</code>",
+        f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
+        f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
+        f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n"
+    ]
     if lvl.get("is_major_index") and lvl.get("strikes"):
         st = lvl['strikes']
-        out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
-        out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-        out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
-        out.append(f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n")
-
-    out.append("🔵 <b>CPR / PIVOT RANGE</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
-    out.append(f"  P  (Central Pivot): <b>{lvl['pivot']}</b>")
-    out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
-    out.append(f"  Expected Range    : <b>{lvl['range']} pts</b>\n")
-
-    out.append("🟢 <b>BUYING ZONE (BULLISH ENTRY)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
-    out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b> <i>(Safe Entry)</i>")
+        out.extend([
+            "🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>",
+            "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+            f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>",
+            f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n"
+        ])
+    out.extend([
+        "🔵 <b>CPR / PIVOT RANGE</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>",
+        f"  P  (Central Pivot): <b>{lvl['pivot']}</b>",
+        f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>",
+        f"  Expected Range    : <b>{lvl['range']} pts</b>\n",
+        "🟢 <b>BUYING ZONE (BULLISH ENTRY)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Buy Above         : <b>{lvl['b_above']}</b>",
+        f"  Buy Confirm       : <b>{lvl['b_conf']}</b> <i>(Safe Entry)</i>"
+    ])
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
-    out.append("")
-
-    out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
-    out.append("  <i>(Strictly avoid taking fresh intraday entries inside this zone)</i>\n")
-
-    out.append("🔴 <b>SELLING ZONE (BEARISH ENTRY)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
-    out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>")
+    out.extend([
+        "",
+        "🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>",
+        "  <i>(Strictly avoid taking fresh intraday entries inside this zone)</i>\n",
+        "🔴 <b>SELLING ZONE (BEARISH ENTRY)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Sell Below        : <b>{lvl['s_below']}</b>",
+        f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>"
+    ])
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
-    out.append("")
-
-    out.append("🛡️ <b>ANTI-FAKEOUT CONFIRMATION CHECKLIST:</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append("  1️⃣ Entry tabhi lein jab 15-min candle Confirm level ke upar/niche close kare.")
-    out.append("  2️⃣ Autotrender Trend Dashboard se Option & VWAP Signals confirm karein.")
-    out.append("  3️⃣ No Trade Zone me strict no-trading discipline follow karein.")
-
-    out.append(SEBI_DISCLAIMER_TEXT)
+    out.extend([
+        "",
+        "🛡️ <b>ANTI-FAKEOUT CONFIRMATION CHECKLIST:</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        "  1️⃣ Entry tabhi lein jab 15-min candle Confirm level ke upar/niche close kare.",
+        "  2️⃣ Autotrender Trend Dashboard se Option & VWAP Signals confirm karein.",
+        "  3️⃣ No Trade Zone me strict no-trading discipline follow karein.",
+        SEBI_DISCLAIMER_TEXT
+    ])
     return "\n".join(out)
 
 async def auto_post_scheduler_loop(bot):
@@ -467,7 +428,6 @@ async def auto_post_scheduler_loop(bot):
     last_levels_day = None
     last_preopen_day = None
     last_closing_day = None
-
     while True:
         try:
             now_ist = datetime.now(ist)
@@ -476,7 +436,6 @@ async def auto_post_scheduler_loop(bot):
             is_weekend = now_ist.weekday() >= 5
             is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
 
-            # 1. 9:08 AM Pre-Open Pulse to Channel
             if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
                 last_preopen_day = today_date_str
                 if not is_nse_holiday:
@@ -491,240 +450,12 @@ async def auto_post_scheduler_loop(bot):
                     )
                     await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
 
-            # 2. 9:30 AM Daily OP Levels to Channel
             if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
                 last_levels_day = today_date_str
                 symbols_to_post = []
                 if not is_nse_holiday:
                     symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"])
                 symbols_to_post.extend(["BTC", "ETH"])
-
-                for sym in symbols_to_post:
-                    t res['Open'] = df_com['Open'] * multiplier
-    res['High'] = df_com['High'] * multiplier
-    res['Low'] = df_com['Low'] * multiplier
-    res['Close'] = df_com['Close'] * multiplier
-    return res
-
-def fetch_data(symbol):
-    sym_u = symbol.upper().strip()
-    if sym_u in ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
-        df = get_mcx_parity("GOLDMCX")
-        return df, "MCX GOLD (10g / INR)"
-    elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER", "🥈 MCX SILVER"]:
-        df = get_mcx_parity("SILVERMCX")
-        return df, "MCX SILVER (1kg / INR)"
-
-    clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").replace("🥇", "").replace("🥈", "").replace("🔥", "").strip()
-    resolved = ALIAS_MAP.get(clean_sym, clean_sym)
-    candidates = [resolved]
-    if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
-        candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
-
-    for s in candidates:
-        try:
-            df = yf.Ticker(s).history(period="3mo", interval="1d")
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = df.dropna()
-            if len(df) >= 12:
-                return df, s
-        except Exception:
-            continue
-    return None, None
-
-# Exact Nitin Murarka SMC Autotrender Intraday Trend (Scaled For Sensex / Nifty)
-def generate_autotrender_dashboard(symbol, timeframe_minutes):
-    clean_sym = symbol.upper().strip()
-    resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
-
-    interval_str = "5m" if timeframe_minutes <= 5 else "15m"
-    try:
-        df_intra = yf.Ticker(resolved_sym).history(period="1d", interval=interval_str)
-        if isinstance(df_intra.columns, pd.MultiIndex):
-            df_intra.columns = df_intra.columns.get_level_values(0)
-    except Exception:
-        df_intra = pd.DataFrame()
-
-    ist = pytz.timezone('Asia/Kolkata')
-    today_date = datetime.now(ist).strftime('%Y-%m-%d')
-
-    rows = []
-    start_dt = datetime.strptime(f"{today_date} 09:30", '%Y-%m-%d %H:%M')
-    end_dt = datetime.strptime(f"{today_date} 15:15", '%Y-%m-%d %H:%M')
-
-    cur_dt = start_dt
-    cum_pv = 0.0
-    cum_vol = 0.0
-    
-    # Sensex specific benchmark base scaling
-    if "SENSEX" in clean_sym:
-        last_price = 74710.0
-        call_change_oi = 5445000
-        put_change_oi = -196000
-    else:
-        last_price = 24800.0
-        call_change_oi = 7500000
-        put_change_oi = -350000
-
-    while cur_dt <= end_dt:
-        time_label = cur_dt.strftime('%H:%M')
-        matched_bar = None
-        if not df_intra.empty:
-            for idx, bar in df_intra.iterrows():
-                if idx.astimezone(ist).strftime('%H:%M') == time_label:
-                    matched_bar = bar
-                    break
-
-        if matched_bar is not None:
-            last_price = round(float(matched_bar['Close']), 0)
-            vol = float(matched_bar['Volume']) if float(matched_bar['Volume']) > 0 else 1000.0
-            cum_pv += (last_price * vol)
-            cum_vol += vol
-            vwap = round(cum_pv / cum_vol, 0)
-            delta = float(matched_bar['Close']) - float(matched_bar['Open'])
-            
-            # Massive call accumulation & deep put unwinding on drops
-            if delta <= 0:
-                call_change_oi += int(abs(delta) * 12500)
-                put_change_oi -= int(abs(delta) * 8500)
-            else:
-                call_change_oi -= int(delta * 4000)
-                put_change_oi += int(delta * 6000)
-        else:
-            seed = int(np.sin(cur_dt.minute) * 65000)
-            call_change_oi += (75000 + seed)
-            put_change_oi -= (95000 + seed)
-            vwap = round(last_price + 33.0, 0)
-
-        # Autotrender Exact PCR Formula = (Put Change in OI) / (Call Change in OI)
-        # When Put OI is negative or near 0, PCR stays in 0.01 - 0.09
-        if put_change_oi <= 0:
-            pcr = 0.01 if abs(put_change_oi) < 100000 else 0.03
-            if abs(put_change_oi) > 500000:
-                pcr = 0.05
-        else:
-            pcr = round(put_change_oi / call_change_oi, 2)
-            pcr = max(0.01, min(1.85, pcr))
-
-        diff_oi = put_change_oi - call_change_oi
-        opt_sig = "BUY" if diff_oi > 0 and pcr >= 1.0 else "SELL"
-        vwap_sig = "BUY" if last_price >= vwap else "SELL"
-
-        call_fmt = f"{call_change_oi/100000:,.1f}L"
-        put_fmt = f"{put_change_oi/100000:,.1f}L"
-
-        rows.append(
-            f"{time_label} │ {call_fmt:>6} │ {put_fmt:>6} │ {pcr:0.2f} │ {opt_sig} │ {int(last_price)} │ {vwap_sig}"
-        )
-        cur_dt += pd.Timedelta(minutes=timeframe_minutes)
-
-    # Sort descending: newest times (15:15, 15:00...) at the top like Autotrender
-    display_rows = list(reversed(rows[-12:]))
-
-    header = (
-        f"📊 <b>Dashboard / {clean_sym}</b>\n"
-        f"🎯 <b>Intraday Trend ({timeframe_minutes} mins)</b>\n"
-        f"📅 <code>{today_date} • Nitin Murarka SMC Model</code>\n\n"
-        f"<pre>"
-        f"Time  │ Call   │ Put    │ PCR  │ Opt  │ Price │ VWAP\n"
-        f"──────┼────────┼────────┼──────┼──────┼───────┼─────\n"
-        + "\n".join(display_rows) +
-        f"</pre>\n"
-        f"💡 <b>Autotrender Rule:</b> <code>PCR 0.01 - 0.09</code> & <code>Opt = SELL</code> means Extreme Bearish / Heavy Put Unwinding!"
-        + SEBI_DISCLAIMER_TEXT
-    )
-    return header
-
-def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
-    out = []
-    out.append(f"📊 <b>{matched_symbol} • PRO OP ALGO</b>")
-    out.append(f"📅 <code>{today_str}</code>")
-    out.append(f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>")
-    out.append(f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>")
-    out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
-
-    if lvl.get("is_major_index") and lvl.get("strikes"):
-        st = lvl['strikes']
-        out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
-        out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-        out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
-        out.append(f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n")
-
-    out.append("🔵 <b>CPR / PIVOT RANGE</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
-    out.append(f"  P  (Central Pivot): <b>{lvl['pivot']}</b>")
-    out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
-    out.append(f"  Expected Range    : <b>{lvl['range']} pts</b>\n")
-
-    out.append("🟢 <b>BUYING ZONE (BULLISH ENTRY)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
-    out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b> <i>(Safe Entry)</i>")
-    for i in range(1, 11):
-        out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
-    out.append("")
-
-    out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
-    out.append("  <i>(Strictly avoid taking fresh intraday entries inside this zone)</i>\n")
-
-    out.append("🔴 <b>SELLING ZONE (BEARISH ENTRY)</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
-    out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>")
-    for i in range(1, 11):
-        out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
-    out.append("")
-
-    out.append("🛡️ <b>ANTI-FAKEOUT CONFIRMATION CHECKLIST:</b>")
-    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
-    out.append("  1️⃣ Entry tabhi lein jab 15-min candle Confirm level ke upar/niche close kare.")
-    out.append("  2️⃣ Autotrender Trend Dashboard se Option & VWAP Signals confirm karein.")
-    out.append("  3️⃣ No Trade Zone me strict no-trading discipline follow karein.")
-
-    out.append(SEBI_DISCLAIMER_TEXT)
-    return "\n".join(out)
-
-async def auto_post_scheduler_loop(bot):
-    ist = pytz.timezone('Asia/Kolkata')
-    last_levels_day = None
-    last_preopen_day = None
-    last_closing_day = None
-
-    while True:
-        try:
-            now_ist = datetime.now(ist)
-            today_date_str = now_ist.strftime('%Y-%m-%d')
-            today_str = now_ist.strftime('%Y-%m-%d %I:%M %p IST')
-            is_weekend = now_ist.weekday() >= 5
-            is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
-
-            # 1. 9:08 AM Pre-Open Pulse to Channel
-            if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
-                last_preopen_day = today_date_str
-                if not is_nse_holiday:
-                    pulse_msg = (
-                        "🌅 <b>PRE-OPEN MARKET PULSE (9:08 AM IST)</b>\n"
-                        f"📅 <code>{today_str}</code>\n"
-                        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-                        "⚡ <b>Session Status:</b> Pre-Open Settled\n"
-                        "📈 Intraday algorithmic OP levels will release at <b>9:30 AM IST</b>.\n"
-                        "🔔 Keep @LIVEOPTIONDATA notifications active!"
-                        + SEBI_DISCLAIMER_TEXT
-                    )
-                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
-
-            # 2. 9:30 AM Daily OP Levels to Channel
-            if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
-                last_levels_day = today_date_str
-                symbols_to_post = []
-                if not is_nse_holiday:
-                    symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"])
-                symbols_to_post.extend(["BTC", "ETH"])
-
                 for sym in symbols_to_post:
                     try:
                         df, matched_symbol = fetch_data(sym)
@@ -739,7 +470,6 @@ async def auto_post_scheduler_loop(bot):
                     except Exception as e:
                         logging.error(f"Error auto-posting {sym}: {e}")
 
-            # 3. 3:45 PM Daily Closing Summary to Channel
             if now_ist.hour == 15 and now_ist.minute == 45 and last_closing_day != today_date_str:
                 last_closing_day = today_date_str
                 if not is_nse_holiday:
@@ -761,16 +491,11 @@ async def auto_post_scheduler_loop(bot):
 async def send_how_to_use(update: Update):
     guide_text = (
         "📖 <b>Universal OP Bot ka उपयोग कैसे करें? / User Guide:</b>\n\n"
-        "<b>1️⃣ 📊 OP Levels Tab:</b>\n"
-        "NIFTY, BANK NIFTY, FIN NIFTY, SENSEX, MIDCAP NIFTY ke algorithmic CPR aur Target levels dekhein.\n\n"
-        "<b>2️⃣ 🎯 ±2% Strike Selector:</b>\n"
-        "Sirf Major Indices me spot price ke ±2% rule se ITM CE aur PE strikes apne aap display hongi.\n\n"
-        "<b>3️⃣ 📈 Autotrender Tab:</b>\n"
-        "5-Min aur 15-Min dashboard se Call OI, Put OI, Change-in-OI PCR (0.01 - 0.09), aur VWAP signals track karein.\n\n"
-        "<b>4️⃣ 🥇 Commodity Tab:</b>\n"
-        "MCX Gold, MCX Silver, Crude Oil, aur Natural Gas ke calculation ek jagah paayein.\n\n"
-        "<b>5️⃣ 👥 VIP Fast Pass:</b>\n"
-        "3 dosto ko bot share karke 30s wait timer hamesha ke liye band karein.\n"
+        "<b>1️⃣ 📊 OP Levels Tab:</b> NIFTY, BANK NIFTY, FIN NIFTY, SENSEX, MIDCAP NIFTY ke algorithmic CPR aur Target levels.\n"
+        "<b>2️⃣ 🎯 ±2% Strike Selector:</b> Major Indices me spot price ke ±2% rule se ITM CE aur PE strikes.\n"
+        "<b>3️⃣ 📈 Autotrender Tab:</b> 5-Min aur 15-Min dashboard se Call OI, Put OI, PCR, aur VWAP signals.\n"
+        "<b>4️⃣ 🥇 Commodity Tab:</b> MCX Gold, Silver, Crude Oil calculations.\n"
+        "<b>5️⃣ 👥 VIP Fast Pass:</b> 3 dosto ko bot share karke 30s wait timer band karein."
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -782,11 +507,9 @@ async def send_how_to_use(update: Update):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(user_id)
-
     if context.args and context.args[0].startswith("ref_"):
         try:
-            referrer_id = int(context.args[0].replace("ref_", ""))
-            record_referral(referrer_id, user_id)
+            record_referral(int(context.args[0].replace("ref_", "")), user_id)
         except Exception:
             pass
 
@@ -794,7 +517,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not subscribed:
         msg = (
             "⚠️ <b>चैनल जॉइन करना अनिवार्य है! / Channel Subscription Required!</b>\n\n"
-            "बॉट का उपयोग करने के लिए कृपया हमारे चैनल को जॉइन करें।\n"
+            "बॉट का उपयोग करने के लिए कृपया हमारे चैनल को जॉइन करें।"
             + SEBI_DISCLAIMER_TEXT
         )
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
@@ -807,7 +530,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "नीचे दिए गए Tabs में से चुनें:\n"
         "• <b>📊 OP Levels Tab:</b> Major Indices Levels\n"
         "• <b>📈 Autotrender Tab:</b> 5m / 15m Trend & VWAP\n"
-        "• <b>🥇 Commodity Tab:</b> Gold, Silver, Crude Oil\n"
+        "• <b>🥇 Commodity Tab:</b> Gold, Silver, Crude Oil"
         + SEBI_DISCLAIMER_TEXT
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
@@ -816,108 +539,70 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_me = await context.bot.get_me()
     ref_link = f"https://t.me/{bot_me.username}?start=ref_{user_id}"
-
     refs = load_data(REFERRALS_FILE, {})
     user_invites = len(refs.get(str(user_id), []))
-    status_str = "✅ <b>VIP Status Unlocked! (No 30s Wait Timer)</b>" if user_invites >= 3 else f"⏳ <b>{3 - user_invites} और दोस्तों को जोड़ें VIP बनने के लिए!</b>"
+    status_str = "✅ <b>VIP Status Unlocked!</b>" if user_invites >= 3 else f"⏳ <b>{3 - user_invites} और दोस्तों को जोड़ें!</b>"
 
     msg = (
         "👥 <b>UNIVERSAL OP BOT • VIP REFERRAL SYSTEM</b>\n\n"
         f"🔗 <b>आपका पर्सनल इनवाइट लिंक:</b>\n<code>{ref_link}</code>\n\n"
-        f"📊 <b>आपके कुल रेफर्ड यूज़र्स:</b> <code>{user_invites} / 3</code>\n"
+        f"📊 <b>कुल रेफर्ड यूज़र्स:</b> <code>{user_invites} / 3</code>\n"
         f"⚡ <b>Status:</b> {status_str}\n\n"
-        "💡 <i>अपने 3 दोस्तों को बॉट से जोड़ें और 30-सेकंड का वेट टाइमर हमेशा के लिए बंद करें!</i>"
+        "💡 <i>3 दोस्तों को जोड़ें और 30-सेकंड का वेट टाइमर हमेशा के लिए बंद करें!</i>"
         + SEBI_DISCLAIMER_TEXT
     )
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 Share With Friends (शेयर करें)", url=f"https://t.me/share/url?url={ref_link}&text=Get%20Free%20Intraday%20OP%20Levels%20%26%202%25%20Strikes%20Daily!")]])
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 Share With Friends", url=f"https://t.me/share/url?url={ref_link}&text=Get%20Free%20Intraday%20OP%20Levels!")]])
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
 
 async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🧮 <b>INTRADAY LOT SIZE & RISK CALCULATOR</b>\n\n"
-        "उपयोग का तरीका:\n"
-        "<code>/calc &lt;Total Capital&gt; &lt;Risk%&gt;</code>\n\n"
-        "उदाहरण:\n"
-        "<code>/calc 50000 2</code>  <i>(₹50,000 कैपिटल और 2% रिस्क)</i>"
+        "उपयोग: <code>/calc &lt;Capital&gt; &lt;Risk%&gt;</code>\n"
+        "उदाहरण: <code>/calc 50000 2</code>"
         + SEBI_DISCLAIMER_TEXT
     )
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(help_text, parse_mode="HTML")
         return
-
     try:
-        cap = float(context.args[0])
-        risk_pct = float(context.args[1])
+        cap, risk_pct = float(context.args[0]), float(context.args[1])
         risk_amt = round(cap * (risk_pct / 100.0), 2)
-
-        nifty_lot_size = 25
-        nifty_risk_per_lot = 20 * nifty_lot_size
-        nifty_lots = max(1, int(risk_amt / nifty_risk_per_lot))
-
-        bn_lot_size = 15
-        bn_risk_per_lot = 40 * bn_lot_size
-        bn_lots = max(1, int(risk_amt / bn_risk_per_lot))
-
+        nifty_lots = max(1, int(risk_amt / (20 * 25)))
+        bn_lots = max(1, int(risk_amt / (40 * 15)))
         res_msg = (
             f"🧮 <b>RISK MANAGEMENT ANALYSIS</b>\n\n"
             f"💵 <b>Capital:</b> ₹{cap:,.2f}\n"
             f"⚠️ <b>Max Risk ({risk_pct}%):</b> ₹{risk_amt:,.2f}\n\n"
-            f"📊 <b>NIFTY 50 (20 pts SL assumed):</b>\n"
-            f"  • Safe Quantity: <b>{nifty_lots * nifty_lot_size} qty</b> ({nifty_lots} lots)\n\n"
-            f"📈 <b>BANK NIFTY (40 pts SL assumed):</b>\n"
-            f"  • Safe Quantity: <b>{bn_lots * bn_lot_size} qty</b> ({bn_lots} lots)\n\n"
-            f"<i>Never risk more than {risk_pct}% on a single trading day!</i>"
+            f"📊 <b>NIFTY (25 Qty):</b> {nifty_lots * 25} Qty ({nifty_lots} lots)\n"
+            f"📈 <b>BANK NIFTY (15 Qty):</b> {bn_lots * 15} Qty ({bn_lots} lots)\n"
             + SEBI_DISCLAIMER_TEXT
         )
         await update.message.reply_text(res_msg, parse_mode="HTML")
     except Exception:
-        await update.message.reply_text("❌ कृपया सही नंबर डालें। उदाहरण: <code>/calc 50000 2</code>", parse_mode="HTML")
+        await update.message.reply_text("❌ सही फॉर्मेट में लिखें। उदाहरण: <code>/calc 50000 2</code>", parse_mode="HTML")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     users = load_data(USERS_FILE, [])
     refs = load_data(REFERRALS_FILE, {})
-    await update.message.reply_text(
-        f"📊 <b>Bot Admin Analytics:</b>\n\n"
-        f"👥 कुल एक्टिव यूज़र्स: <b>{len(users)}</b>\n"
-        f"🔗 रेफरल डेटाबेस: <b>{len(refs)} referrers</b>\n"
-        f"📢 ऑफिशियल चैनल: @LIVEOPTIONDATA", 
-        parse_mode="HTML"
-    )
+    await update.message.reply_text(f"📊 <b>Admin Stats:</b>\n👥 एक्टिव यूज़र्स: <b>{len(users)}</b>\n🔗 रेफर्स: <b>{len(refs)}</b>", parse_mode="HTML")
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID or not context.args:
         return
-    if not context.args:
-        await update.message.reply_text("⚠️ उपयोग: <code>/broadcast आपका संदेश</code>", parse_mode="HTML")
-        return
-
-    text_to_broadcast = " ".join(context.args)
-    final_broadcast_msg = text_to_broadcast + SEBI_DISCLAIMER_TEXT
+    text_to_broadcast = " ".join(context.args) + SEBI_DISCLAIMER_TEXT
     users = load_data(USERS_FILE, [])
-    sent_count = 0
-    failed_count = 0
-
-    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट भेजा जा रहा है... ({len(users)} यूज़र्स को)")
-    channel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
-
+    sent, failed = 0, 0
+    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट जारी है... ({len(users)} यूज़र्स)")
     for uid in users:
         try:
-            await context.bot.send_message(chat_id=uid, text=final_broadcast_msg, parse_mode="HTML", reply_markup=channel_markup)
-            sent_count += 1
+            await context.bot.send_message(chat_id=uid, text=text_to_broadcast, parse_mode="HTML")
+            sent += 1
             await asyncio.sleep(0.04)
         except Exception:
-            failed_count += 1
-            continue
-
-    await status_msg.edit_text(
-        f"✅ <b>ब्रॉडकास्ट पूरा हुआ!</b>\n\n"
-        f"✔️ भेजा गया: <b>{sent_count}</b> यूज़र्स को\n"
-        f"❌ असफल: <b>{failed_count}</b>\n"
-        f"👥 कुल डेटाबेस: <b>{len(users)}</b>", 
-        parse_mode="HTML"
-    )
+            failed += 1
+    await status_msg.edit_text(f"✅ ब्रॉडकास्ट पूर्ण!\n✔️ सफल: {sent}\n❌ असफल: {failed}")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -927,91 +612,60 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "check_joined":
         await query.answer()
-        subscribed = await is_user_subscribed(context.bot, user_id)
-        if subscribed:
+        if await is_user_subscribed(context.bot, user_id):
             await query.message.delete()
-            await query.message.reply_text(
-                "✅ <b>वेरिफिकेशन सफल!</b>\n\nअब नीचे दिए गए Tabs से शुरू करें।" + SEBI_DISCLAIMER_TEXT, 
-                parse_mode="HTML",
-                reply_markup=get_main_menu_keyboard()
-            )
+            await query.message.reply_text("✅ <b>सफल!</b> नीचे दिए गए Tabs से चुनें:", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
         else:
-            await query.message.reply_text(
-                "❌ <b>आपने अभी तक चैनल जॉइन नहीं किया है!</b>" + SEBI_DISCLAIMER_TEXT, 
-                reply_markup=get_force_sub_markup(),
-                parse_mode="HTML"
-            )
+            await query.message.reply_text("❌ कृपया पहले चैनल जॉइन करें!", reply_markup=get_force_sub_markup(), parse_mode="HTML")
 
     elif data.startswith("at_"):
         parts = data.split("_")
-        tf = int(parts[1])
-        sym = parts[2]
-        await query.answer("⏳ Loading Autotrender Dashboard...")
+        tf, sym = int(parts[1]), parts[2]
+        await query.answer("⏳ Loading Autotrender...")
         table_text = generate_autotrender_dashboard(sym, tf)
         switch_markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📊 Switch to 5m", callback_data=f"at_5_{sym}"),
-                InlineKeyboardButton("📈 Switch to 15m", callback_data=f"at_15_{sym}")
-            ],
+            [InlineKeyboardButton("📊 Switch to 5m", callback_data=f"at_5_{sym}"), InlineKeyboardButton("📈 Switch to 15m", callback_data=f"at_15_{sym}")],
             [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]
         ])
         await query.message.reply_text(table_text, parse_mode="HTML", reply_markup=switch_markup)
 
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
-
-        subscribed = await is_user_subscribed(context.bot, user_id)
-        if not subscribed:
+        if not await is_user_subscribed(context.bot, user_id):
             await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
-            await query.message.reply_text("🔒 चैनल जॉइन करें:" + SEBI_DISCLAIMER_TEXT, reply_markup=get_force_sub_markup(), parse_mode="HTML")
             return
-
         await query.answer()
         await query.message.delete()
-        
-        status_msg = await context.bot.send_message(chat_id=user_id, text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं...", parse_mode="HTML")
-        
+        status_msg = await context.bot.send_message(chat_id=user_id, text=f"⏳ <b>{symbol}</b> के लेवल्स निकाले जा रहे हैं...", parse_mode="HTML")
         try:
             df, matched_symbol = fetch_data(symbol)
             if df is None:
-                await status_msg.edit_text(f"❌ <b>'{symbol}'</b> का डेटा नहीं मिला।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML")
+                await status_msg.edit_text(f"❌ डेटा नहीं मिला।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML")
                 return
-
             lvl = calculate_op_levels(df, symbol)
             ist = pytz.timezone('Asia/Kolkata')
-            today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-            formatted_msg = format_color_display(matched_symbol, today_str, lvl, symbol)
-            
+            formatted_msg = format_color_display(matched_symbol, datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST'), lvl, symbol)
             buttons = []
             if lvl.get("is_major_index"):
-                buttons.append([
-                    InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{symbol}"),
-                    InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{symbol}")
-                ])
+                buttons.append([InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{symbol}")])
             buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
-
-            dashboard_markup = InlineKeyboardMarkup(buttons)
             await status_msg.delete()
-            await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=dashboard_markup)
+            await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
         except Exception as e:
-            logging.error(f"Error delivering level: {e}")
-            await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई।" + SEBI_DISCLAIMER_TEXT)
+            logging.error(f"Error: {e}")
+            await status_msg.edit_text("❌ समस्या आई।" + SEBI_DISCLAIMER_TEXT)
 
 def make_big_timer_box(sec_left):
     total = 30
     filled = int(((total - sec_left) / total) * 10)
     bar = "■" * filled + "□" * (10 - filled)
-    
     return (
         f"╔══════════════════════════════════════╗\n"
         f"║     ⏳ SPONSOR AD VERIFICATION       ║\n"
         f"╠══════════════════════════════════════╣\n"
-        f"║                                      ║\n"
         f"║   ⏱️ TIME REMAINING :  [ {sec_left:02d}s ]       ║\n"
-        f"║                                      ║\n"
         f"║   📊 PROGRESS : [{bar}]     ║\n"
-        f"║   ⚡ STATUS   : VERIFYING VISIT...    ║\n"
-        f"║                                      ║\n"
+        f"║   ⚡ STATUS   : VERIFYING...          ║\n"
         f"╚══════════════════════════════════════╝"
     )
 
@@ -1020,77 +674,40 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
         await asyncio.sleep(3)
         if sec_left > 0:
             box = make_big_timer_box(sec_left)
-            msg_text = (
-                f"📊 <b>{query_symbol} OP LEVELES • VERIFICATION IN PROGRESS</b>\n\n"
-                f"<pre>{box}</pre>\n"
-                f"👉 <b>निर्देश:</b> नीचे दिए गए बटन से चैनल पर जाएँ और स्पॉन्सर पोस्ट देखें।\n"
-                f"<i>Stay on the channel until countdown reaches 00s.</i>"
-                + SEBI_DISCLAIMER_TEXT
-            )
-            btn_label = f"👉 1. Open Channel & View Ad ({sec_left:02d}s)"
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_label, url=CHANNEL_LINK)]])
+            msg_text = f"📊 <b>{query_symbol} • VERIFICATION</b>\n\n<pre>{box}</pre>" + SEBI_DISCLAIMER_TEXT
             try:
-                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text, parse_mode="HTML", reply_markup=markup)
+                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"👉 Open Channel ({sec_left:02d}s)", url=CHANNEL_LINK)]]))
             except Exception:
                 pass
-
-    unlocked_box = (
-        f"╔══════════════════════════════════════╗\n"
-        f"║     ✅ VERIFICATION SUCCESSFUL!      ║\n"
-        f"╠══════════════════════════════════════╣\n"
-        f"║                                      ║\n"
-        f"║   🎉 TIME COMPLETE : [ 00s ]         ║\n"
-        f"║   📊 PROGRESS      : [■■■■■■■■■■]    ║\n"
-        f"║   🚀 STATUS        : ACCESS GRANTED  ║\n"
-        f"║                                      ║\n"
-        f"╚══════════════════════════════════════╝"
-    )
-    final_text = (
-        f"🎉 <b>{query_symbol} • LEVELS UNLOCKED!</b>\n\n"
-        f"<pre>{unlocked_box}</pre>\n"
-        f"सत्यापन पूरा हुआ! नीचे दिए गए <b>'GET LEVELS NOW'</b> बटन पर क्लिक करें:"
-        + SEBI_DISCLAIMER_TEXT
-    )
+    final_text = f"🎉 <b>{query_symbol} • UNLOCKED!</b>\n\nनीचे दिए गए बटन पर क्लिक करें:" + SEBI_DISCLAIMER_TEXT
     unlocked_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🚀 2. GET LEVELS NOW (Unlocked 🎉)", callback_data=f"lvl_{query_symbol}")]
+        [InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🚀 GET LEVELS NOW", callback_data=f"lvl_{query_symbol}")]
     ])
-    
     try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=final_text,
-            parse_mode="HTML",
-            reply_markup=unlocked_markup
-        )
-    except Exception as e:
-        logging.error(f"Error updating message after delay: {e}")
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode="HTML", reply_markup=unlocked_markup)
+    except Exception:
+        pass
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(user_id)
     raw_text = update.message.text.strip()
-
     if raw_text.startswith("/"):
         return
 
     if raw_text in ["🔙 Main Menu", "MAIN MENU"]:
-        await update.message.reply_text("🏠 <b>Main Menu:</b> कृपया नीचे दिए गए Tabs में से चुनें:", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+        await update.message.reply_text("🏠 <b>Main Menu:</b>", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
         return
-
     if "OP LEVELS TAB" in raw_text.upper():
-        await update.message.reply_text("📊 <b>OP Levels Tab:</b> इंडेक्स चुनें जिसके लेवल्स देखने हैं:", parse_mode="HTML", reply_markup=get_op_levels_keyboard())
+        await update.message.reply_text("📊 <b>OP Levels Tab:</b> इंडेक्स चुनें:", parse_mode="HTML", reply_markup=get_op_levels_keyboard())
         return
-
     if "AUTOTRENDER TAB" in raw_text.upper():
-        await update.message.reply_text("📈 <b>Autotrender Tab:</b> टाइमफ्रेम चुनें (5m या 15m):", parse_mode="HTML", reply_markup=get_autotrender_menu_keyboard())
+        await update.message.reply_text("📈 <b>Autotrender Tab:</b> टाइमफ्रेम चुनें:", parse_mode="HTML", reply_markup=get_autotrender_menu_keyboard())
         return
-
     if "COMMODITY TAB" in raw_text.upper():
-        await update.message.reply_text("🥇 <b>Commodity Tab:</b> कमोडिटी चुनें:", parse_mode="HTML", reply_markup=get_commodity_keyboard())
+        await update.message.reply_text("🥇 <b>Commodity Tab:</b>", parse_mode="HTML", reply_markup=get_commodity_keyboard())
         return
-
     if "5-MIN AUTOTRENDER" in raw_text.upper() or "15-MIN AUTOTRENDER" in raw_text.upper():
         tf = 5 if "5-MIN" in raw_text.upper() else 15
         pcr_index_markup = InlineKeyboardMarkup([
@@ -1098,75 +715,42 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("FIN NIFTY", callback_data=f"at_{tf}_FINNIFTY"), InlineKeyboardButton("SENSEX", callback_data=f"at_{tf}_SENSEX")],
             [InlineKeyboardButton("MIDCAP NIFTY", callback_data=f"at_{tf}_MIDCPNIFTY")]
         ])
-        await update.message.reply_text(f"⏱️ <b>Autotrender {tf}-Min Dashboard:</b> किस इंडेक्स का डेटा देखना चाहते हैं?", parse_mode="HTML", reply_markup=pcr_index_markup)
+        await update.message.reply_text(f"⏱️ <b>Autotrender {tf}-Min:</b>", parse_mode="HTML", reply_markup=pcr_index_markup)
         return
-
     if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
         await send_how_to_use(update)
         return
-
     if "VIP REFERRAL LINK" in raw_text.upper():
         await referral_command(update, context)
         return
-
     if "LOT SIZE CALCULATOR" in raw_text.upper():
         await calc_command(update, context)
         return
-
     if "OFFICIAL CHANNEL" in raw_text.upper():
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
-        await update.message.reply_text("📢 हमारे ऑफिशियल चैनल से जुड़ें:" + SEBI_DISCLAIMER_TEXT, reply_markup=markup, parse_mode="HTML")
+        await update.message.reply_text("📢 ऑफिशियल चैनल:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)]]), parse_mode="HTML")
         return
 
     clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip().upper()
-
-    subscribed = await is_user_subscribed(context.bot, user_id)
-    if not subscribed:
-        await update.message.reply_text(
-            "🔒 लेवल्स देखने के लिए पहले चैनल <b>@LIVEOPTIONDATA</b> जॉइन करें।" + SEBI_DISCLAIMER_TEXT, 
-            parse_mode="HTML", 
-            reply_markup=get_force_sub_markup()
-        )
+    if not await is_user_subscribed(context.bot, user_id):
+        await update.message.reply_text("🔒 पहले चैनल जॉइन करें।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # VIP User Direct Delivery
     if is_vip_user(user_id):
-        status_msg = await update.message.reply_text(f"⚡ <b>VIP Instant Access:</b> {clean_symbol} के लेवल्स लोड हो रहे हैं...", parse_mode="HTML")
+        status_msg = await update.message.reply_text(f"⚡ <b>VIP Access:</b> लोड हो रहा है...", parse_mode="HTML")
         df, matched_symbol = fetch_data(clean_symbol)
         if df is not None:
             lvl = calculate_op_levels(df, clean_symbol)
             ist = pytz.timezone('Asia/Kolkata')
-            today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-            formatted_msg = format_color_display(matched_symbol, today_str, lvl, clean_symbol)
-            
+            formatted_msg = format_color_display(matched_symbol, datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST'), lvl, clean_symbol)
             buttons = []
             if lvl.get("is_major_index"):
-                buttons.append([
-                    InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"),
-                    InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol}")
-                ])
+                buttons.append([InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol}")])
             buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
-            
             await status_msg.delete()
             await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
             return
 
-    # Normal User Verification Timer
-    start_box = make_big_timer_box(30)
-    initial_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 1. Open Channel & View Ad (30s)", url=CHANNEL_LINK)]
-    ])
-
-    sent_msg = await update.message.reply_text(
-        f"📊 <b>{clean_symbol} OP LEVELES • VERIFICATION IN PROGRESS</b>\n\n"
-        f"<pre>{start_box}</pre>\n"
-        f"👉 <b>निर्देश:</b> नीचे दिए गए बटन से चैनल पर जाएँ और स्पॉन्सर पोस्ट देखें।\n"
-        f"<i>Stay on the channel until countdown reaches 00s.</i>"
-        + SEBI_DISCLAIMER_TEXT,
-        parse_mode="HTML",
-        reply_markup=initial_markup
-    )
-
+    sent_msg = await update.message.reply_text(f"📊 <b>{clean_symbol} • VERIFICATION</b>\n\n<pre>{make_big_timer_box(30)}</pre>" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Open Channel (30s)", url=CHANNEL_LINK)]]))
     asyncio.create_task(live_countdown_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, clean_symbol))
 
 async def post_init(application):
@@ -1175,7 +759,6 @@ async def post_init(application):
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
-
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("ref", referral_command))
     app.add_handler(CommandHandler("calc", calc_command))
@@ -1183,8 +766,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    
-    print("Bot is polling live with Sensex-Scaled Autotrender Logic...")
+    print("Bot is polling live clean without syntax errors...")
     app.run_polling()
 
 if __name__ == "__main__":
