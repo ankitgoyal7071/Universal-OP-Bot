@@ -127,6 +127,7 @@ def get_force_sub_markup():
     ])
 
 def calculate_op_levels(df):
+    current_price = round(float(df['Close'].iloc[-1]), 2)
     dop = float(df['Open'].iloc[-1])
     dc = float(df['Close'].iloc[-2])
     dhigh = float(df['High'].iloc[-2])
@@ -171,6 +172,7 @@ def calculate_op_levels(df):
         targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
     return {
+        "current_price": current_price,
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
         "cpr_type": cpr_type,
         "b_above": round(doKdc + (range1 * 0.236)),
@@ -229,6 +231,7 @@ def format_color_display(matched_symbol, today_str, lvl):
     out = []
     out.append(f"📊 <b>{matched_symbol} • OP CALCULATIONS</b>")
     out.append(f"📅 <code>{today_str}</code>")
+    out.append(f"💰 <b>Current Price (LTP):</b> <code>{lvl['current_price']}</code>")
     out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
 
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
@@ -314,7 +317,7 @@ async def send_how_to_use(update: Update):
         "<b>3️⃣ स्टेप 3 (लाइव बिग काउंटडाउन):</b>\n"
         "स्क्रीन पर बड़ा डिजिटल टाइमर बॉक्स चलेगा (30s से 0s तक)।\n\n"
         "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
-        "समय पूरा होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन आएगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
+        "समय पूरा होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन आएगा। उस पर क्लिक करके तुरंत लेवल्स और Current Price देखें!\n"
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -586,7 +589,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live clean without any syntax errors...")
+    print("Bot is polling live clean with Current Price support...")
     app.run_polling()
 
 if __name__ == "__main__":
