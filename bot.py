@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
@@ -11,11 +12,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-TELEGRAM_BOT_TOKEN = "8983062859:AAH0l6D3kqC1rVllTYX7tQLFBDOqd8po_lI"
+TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
+
+# चैनल पर रुकने का अनिवार्य समय (सेकंड में)
+MANDATORY_VISIT_SECONDS = 6
+
+# यूज़र के विज़िट का समय ट्रैक करने के लिए
+USER_VISIT_TIMESTAMPS = {}
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -216,11 +223,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     data = query.data
 
     if data == "check_joined":
+        await query.answer()
         subscribed = await is_user_subscribed(context.bot, user_id)
         if subscribed:
             await query.message.delete()
@@ -230,11 +237,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
+
+        # 1. क्या यूज़र अभी भी चैनल का मेंबर है?
+        subscribed = await is_user_subscribed(context.bot, user_id)
+        if not subscribed:
+            await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
+            await query.message.reply_text("🔒 बॉट का उपयोग जारी रखने के लिए चैनल जॉइन करें:", reply_markup=get_force_sub_markup())
+            return
+
+        # 2. क्या यूज़र ने चैनल पर आवश्यक 6 सेकंड बिताए?
+        request_time = USER_VISIT_TIMESTAMPS.get(user_id, 0)
+        elapsed = time.time() - request_time
+
+        if elapsed < MANDATORY_VISIT_SECONDS and user_id != ADMIN_ID:
+            remaining = int(MANDATORY_VISIT_SECONDS - elapsed)
+            # यह यूज़र के फोन स्क्रीन पर पॉपअप अलर्ट दिखाएगा
+            await query.answer(
+                f"⚠️ आपने चैनल की पोस्ट नहीं देखी!\nकृपया चैनल पर जाकर {remaining} सेकंड पोस्ट/Ad देखें, फिर बटन दबाएं।", 
+                show_alert=True
+            )
+            return
+
+        await query.answer()
         await query.message.delete()
         
         status_msg = await context.bot.send_message(
             chat_id=user_id, 
-            text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं, कृपया 2 सेकंड प्रतीक्षा करें...", 
+            text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं...", 
             parse_mode="HTML"
         )
         
@@ -271,6 +300,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
+    # यूज़र के रिक्वेस्ट का टाइम नोट करें
+    USER_VISIT_TIMESTAMPS[user_id] = time.time()
+
     visit_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
         [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data=f"lvl_{query}")]
@@ -278,7 +310,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        "लेवल्स तुरंत पाने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
+        "लेवल्स अनलॉक करने के लिए चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को कम से कम 5 सेकंड तक देखें, फिर नीचे दिए बटन पर टैप करें।"
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=visit_markup)
 
