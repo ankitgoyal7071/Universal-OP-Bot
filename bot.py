@@ -232,7 +232,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = data.replace("lvl_", "").strip()
         await query.message.delete()
         
-        # यूज़र को तुरंत प्रोग्रेस मैसेज भेजना
         status_msg = await context.bot.send_message(
             chat_id=user_id, 
             text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं, कृपया 2 सेकंड प्रतीक्षा करें...", 
@@ -259,7 +258,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
         except Exception as e:
             logging.error(f"Error delivering level: {e}")
-            await status_msg.edit_text("❌ लेवल्स निकालने में कोई तकनीकी समस्या आई। कृपया थोड़ी देर बाद पुनः प्रयास करें।")
+            await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। कृपया पुनः प्रयास करें।")
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -291,7 +290,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live...")
+    print("Bot is running purely with Official Channel flow...")
     app.run_polling()
 
 if __name__ == "__main__":
