@@ -1,6 +1,6 @@
 import os
 import threading
-import time
+import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
@@ -18,11 +18,8 @@ ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# चैनल पर रुकने का अनिवार्य समय (7 सेकंड)
-MANDATORY_VISIT_SECONDS = 7
-
-# यूज़र के विज़िट का समय ट्रैक करने के लिए
-USER_VISIT_TIMESTAMPS = {}
+# दूसरा बटन ठीक 30 सेकंड बाद ही स्क्रीन पर आएगा
+MANDATORY_VISIT_SECONDS = 30
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -236,29 +233,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
 
-        # 1. क्या यूज़र अभी भी चैनल में है?
         subscribed = await is_user_subscribed(context.bot, user_id)
         if not subscribed:
             await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
             await query.message.reply_text("🔒 बॉट का उपयोग जारी रखने के लिए चैनल जॉइन करें:", reply_markup=get_force_sub_markup())
             return
-
-        # 2. सख्त 7-सेकंड टाइमर जांच
-        request_time = USER_VISIT_TIMESTAMPS.get(user_id, 0)
-        elapsed = time.time() - request_time
-
-        if elapsed < MANDATORY_VISIT_SECONDS:
-            remaining = int(round(MANDATORY_VISIT_SECONDS - elapsed))
-            if remaining <= 0:
-                remaining = 1
-            await query.answer(
-                f"⏳ रुकिए!\n\nआपने चैनल पर विज्ञापन नहीं देखा।\nकृपया चैनल पर जाकर {remaining} सेकंड पोस्ट/Ad देखें, फिर यह बटन दबाएँ।", 
-                show_alert=True
-            )
-            return
-
-        # टाइमर रीसेट
-        USER_VISIT_TIMESTAMPS.pop(user_id, None)
 
         await query.answer()
         await query.message.delete()
@@ -291,6 +270,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error delivering level: {e}")
             await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। कृपया पुनः प्रयास करें।")
 
+async def delayed_unlock(bot, chat_id, message_id, query_symbol):
+    """30 सेकंड तक बैकग्राउंड में इंतज़ार करेगा, उसके बाद ही 'Get Levels' बटन मैसेज में जोड़ेगा"""
+    await asyncio.sleep(MANDATORY_VISIT_SECONDS)
+    
+    # 30 सेकंड बाद दूसरा बटन तैयार होगा
+    unlocked_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ 2. Get Levels (अनलॉक हो गया)", callback_data=f"lvl_{query_symbol}")]
+    ])
+    
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=(
+                f"🎉 <b>{query_symbol} के लेवल्स अनलॉक हो चुके हैं!</b>\n\n"
+                "30 सेकंड का विज़िट समय पूरा हो गया है।\n"
+                "लेवल्स देखने के लिए नीचे दिए गए बटन पर टैप करें:"
+            ),
+            parse_mode="HTML",
+            reply_markup=unlocked_markup
+        )
+    except Exception as e:
+        logging.error(f"Error updating message after delay: {e}")
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     query = update.message.text.strip().upper()
@@ -302,22 +306,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # मैसेज भेजते ही टाइमर शुरू
-    USER_VISIT_TIMESTAMPS[user_id] = time.time()
-
-    # पहले बटन पर डायरेक्ट URL लिंक है, जिससे एक ही क्लिक में सीधा चैनल खुल जाएगा!
-    direct_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 1. Visit Channel & View Ad (एक क्लिक में चैनल)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ 2. I Checked Channel (Get Levels)", callback_data=f"lvl_{query}")]
+    # शुरुआत में केवल चैनल देखने का 1 बटन होगा (दूसरा बटन होगा ही नहीं!)
+    initial_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
     ])
 
-    msg = (
+    sent_msg = await update.message.reply_text(
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        f"1. ऊपर बटन दबाकर चैनल खोलें और विज्ञापन देखें (1-क्लिक रीडायरेक्ट)।\n"
-        f"2. चैनल पर कम से कम <b>{MANDATORY_VISIT_SECONDS} सेकंड</b> रुकें।\n"
-        f"3. फिर नीचे <b>✅ 2. I Checked Channel</b> बटन दबाकर तुरंत लेवल्स पाएँ।"
+        f"1. ऊपर दिए बटन से चैनल पर जाएँ और विज्ञापन/पोस्ट देखें।\n"
+        f"⏳ दूसरा बटन <b>(Get Levels)</b> ठीक <b>{MANDATORY_VISIT_SECONDS} सेकंड</b> बाद यहीं अपने आप अनलॉक होकर आएगा।",
+        parse_mode="HTML",
+        reply_markup=initial_markup
     )
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=direct_markup)
+
+    # 30 सेकंड का टाइमर शुरू, इसके पूरा होने पर ही दूसरा बटन स्क्रीन पर आएगा
+    asyncio.create_task(delayed_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, query))
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
@@ -327,7 +330,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with 1-click channel redirect...")
+    print("Bot is polling live with delayed unlock...")
     app.run_polling()
 
 if __name__ == "__main__":
