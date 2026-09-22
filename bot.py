@@ -16,6 +16,7 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
+import requests
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8868136868:AAGcUhj4to9fDi_SsADjDef1vlZt2nfDLM0")
 ADMIN_ID = 1612210913
@@ -87,7 +88,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Universal Pro Bot Suite running healthy with 9-Column HD Engine!")
+        self.wfile.write(b"Universal Pro Bot Suite running healthy with Live NSE PCR Engine!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -297,7 +298,31 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Matplotlib 9-Column HD Image Generator matching Exact Autotrender UI
+def fetch_live_nse_option_chain(symbol):
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+        }
+        session = requests.Session()
+        session.get("https://www.nseindia.com", headers=headers, timeout=4)
+        api_sym = "NIFTY" if "NIFTY" in symbol.upper() else ("BANKNIFTY" if "BANK" in symbol.upper() else "SENSEX")
+        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={api_sym}"
+        resp = session.get(url, headers=headers, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            records = data.get('records', {}).get('data', [])
+            total_ce = sum(item.get('CE', {}).get('changeinOpenInterest', 0) for item in records if 'CE' in item)
+            total_pe = sum(item.get('PE', {}).get('changeinOpenInterest', 0) for item in records if 'PE' in item)
+            if total_ce != 0:
+                live_pcr = round(total_pe / total_ce, 2)
+                return live_pcr, total_ce, total_pe
+    except Exception as e:
+        logging.error(f"Live NSE API fetch error: {e}")
+    return None, None, None
+
+# Matplotlib 9-Column HD Image Generator with Exact Autotrender Parity
 def generate_autotrender_image(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -386,7 +411,6 @@ def generate_autotrender_image(symbol, timeframe_minutes):
 
     table_data = list(reversed(rows[-12:]))
 
-    # Wide HD Figure to fit all 9 columns cleanly without crowding
     fig, ax = plt.subplots(figsize=(10, 7), facecolor='#121212', dpi=200)
     ax.set_facecolor('#121212')
     ax.axis('off')
@@ -728,7 +752,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🥇 <b>Commodity Tab:</b>", parse_mode="HTML", reply_markup=get_commodity_keyboard())
         return
     
-    # Fixed substring bug: Check 15-MIN first before 5-MIN
     if "15-MIN" in raw_text.upper():
         pcr_index_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("NIFTY 50", callback_data="at_15_NIFTY"), InlineKeyboardButton("BANK NIFTY", callback_data="at_15_BANKNIFTY")],
@@ -795,7 +818,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    print("Bot is polling live with Full 9-Column UI & Timeframe Bug Fixed...")
+    print("Bot is polling live with 9-Column UI & Exact Autotrender Parity Engine...")
     app.run_polling()
 
 if __name__ == "__main__":
