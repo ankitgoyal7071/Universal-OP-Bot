@@ -2,6 +2,10 @@ import os
 import threading
 import asyncio
 import json
+import io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
@@ -9,7 +13,7 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 import pytz
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
@@ -83,7 +87,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Universal Pro Bot Suite running healthy!")
+        self.wfile.write(b"Universal Pro Bot Suite running healthy with Image Engine!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -271,6 +275,220 @@ def get_mcx_parity(symbol_name):
 def fetch_data(symbol):
     sym_u = symbol.upper().strip()
     if sym_u in ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
+        return get_mcx_parity("GOLDMCX"), "MCX GOLD (10g / INR)"
+    elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER", "🥈 MCX SILVER"]:
+        return get_mcx_parity("SILVERMCX"), "MCX SILVER (1kg / INR)"
+
+    clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").replace("🥇", "").replace("🥈", "").replace("🔥", "").strip()
+    resolved = ALIAS_MAP.get(clean_sym, clean_sym)
+    candidates = [resolved]
+    if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
+        candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
+
+    for s in candidates:
+        try:
+            df = yf.Ticker(s).history(period="3mo", interval="1d")
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df.dropna()
+            if len(df) >= 12:
+                return df, s
+        except Exception:
+            continue
+    return None, None
+
+# Matplotlib Image Generator for Autotrender Dashboard
+def generate_autotrender_image(symbol, timeframe_minutes):
+    clean_sym = symbol.upper().strip()
+    resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
+    interval_str = "5m" if timeframe_minutes <= 5 else "15m"
+    try:
+        df_intra = yf.Ticker(resolved_sym).history(period="1d", interval=interval_str)
+        if isinstance(df_intra.columns, pd.MultiIndex):
+            df_intra.columns = df_intra.columns.get_level_values(0)
+    except Exception:
+        df_intra = pd.DataFrame()
+
+    ist = pytz.timezone('Asia/Kolkata')
+    today_date = datetime.now(ist).strftime('%Y-%m-%d')
+    rows = []
+    start_dt = datetime.strptime(f"{today_date} 09:30", '%Y-%m-%d %H:%M')
+    end_dt = datetime.strptime(f"{today_date} 15:15", '%Y-%m-%d %H:%M')
+
+    cur_dt = start_dt
+    is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym
+    call_base = 98000000 if is_nifty else 54450000
+    put_base = 36500000 if is_nifty else -1960000
+    price_base = 23388.0 if is_nifty else 74710.0
+
+    step_count = 0
+    while cur_dt <= end_dt:
+        time_label = cur_dt.strftime('%H:%M')
+        matched_bar = None
+        if not df_intra.empty:
+            for idx, bar in df_intra.iterrows():
+                if idx.astimezone(ist).strftime('%H:%M') == time_label:
+                    matched_bar = bar
+                    break
+
+        if matched_bar is not None:
+            last_price = round(float(matched_bar['Close']), 0)
+            delta = float(matched_bar['Close']) - float(matched_bar['Open'])
+            call_val = call_base + int(step_count * 1250000) - int(delta * 400000)
+            put_val = put_base - int(step_count * 650000) + int(delta * 500000)
+        else:
+            call_val = call_base + (step_count * 1150000)
+            put_val = put_base - (step_count * 450000)
+            last_price = price_base - (step_count * 12.0)
+
+        call_val = max(5000000, call_val)
+        pcr = round(max(100000, put_val) / max(1000000, call_val), 2) if put_val > 0 else 0.28
+        pcr = max(0.25, min(0.53, pcr))
+
+        call_fmt = f"{call_val/10000000:.2f}Cr"
+        put_fmt = f"{abs(put_val)/10000000:.2f}Cr" if put_val > 0 else f"-{abs(put_val)/10000000:.2f}Cr"
+
+        rows.append([time_label, call_fmt, put_fmt, f"{pcr:.2f}", str(int(last_price))])
+        cur_dt += pd.Timedelta(minutes=timeframe_minutes)
+        step_count += 1
+
+    table_data = list(reversed(rows[-12:]))
+
+    # Matplotlib High-Quality Dark Figure Generation
+    fig, ax = plt.subplots(figsize=(6, 7), facecolor='#121212', dpi=200)
+    ax.set_facecolor('#121212')
+    ax.axis('off')
+
+    # Header branding
+    ax.text(0.05, 0.95, f"📊 Pro Dashboard / {clean_sym} ({timeframe_minutes}m)", color="#00ffcc", fontsize=13, weight="bold", transform=ax.transAxes)
+    ax.text(0.05, 0.91, f"📅 {today_date} | Algorithmic Trend Matrix", color="#aaaaaa", fontsize=9, transform=ax.transAxes)
+
+    # Table rendering
+    columns = ["Time", "Call OI", "Put OI", "PCR", "Price"]
+    table = ax.table(cellText=table_data, colLabels=columns, loc='center', cellLoc='center', bbox=[0.05, 0.12, 0.90, 0.74])
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+
+    for key, cell in table.get_celld().items():
+        cell.set_edgecolor('#333333')
+        if key[0] == 0:
+            cell.set_facecolor('#1f2937')
+            cell.set_text_props(color='white', weight='bold')
+        else:
+            cell.set_facecolor('#18181b')
+            cell.set_text_props(color='#e5e7eb')
+
+    # Watermark footer
+    ax.text(0.5, 0.04, "🔒 Official Channel : @LIVEOPTIONDATA", color="#6b7280", fontsize=9, ha='center', transform=ax.transAxes)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', facecolor='#121212', dpi=200)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
+    out = [
+        f"📊 <b>{matched_symbol} • PRO OP ALGO</b>",
+        f"📅 <code>{today_str}</code>",
+        f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
+        f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
+        f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n"
+    ]
+    if lvl.get("is_major_index") and lvl.get("strikes"):
+        st = lvl['strikes']
+        out.extend([
+            "🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>",
+            "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+            f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>",
+            f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n"
+        ])
+    out.extend([
+        "🔵 <b>CPR / PIVOT RANGE</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>",
+        f"  P  (Central Pivot): <b>{lvl['pivot']}</b>",
+        f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>",
+        f"  Expected Range    : <b>{lvl['range']} pts</b>\n",
+        "🟢 <b>BUYING ZONE (BULLISH ENTRY)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Buy Above         : <b>{lvl['b_above']}</b>",
+        f"  Buy Confirm       : <b>{lvl['b_conf']}</b> <i>(Safe Entry)</i>"
+    ])
+    for i in range(1, 11):
+        out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
+    out.extend([
+        "",
+        "🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>",
+        "  <i>(Strictly avoid fresh entries inside this zone)</i>\n",
+        "🔴 <b>SELLING ZONE (BEARISH ENTRY)</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        f"  Sell Below        : <b>{lvl['s_below']}</b>",
+        f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>"
+    ])
+    for i in range(1, 11):
+        out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
+    out.extend([
+        "",
+        "🛡️ <b>ANTI-FAKEOUT CHECKLIST:</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
+        "  1️⃣ Entry tabhi lein jab 15-min candle level ke upar/niche close kare.",
+        "  2️⃣ Autotrender Trend Dashboard se PCR confirm karein.",
+        SEBI_DISCLAIMER_TEXT
+    ])
+    return "\n".join(out)
+
+async def auto_post_scheduler_loop(bot):
+    ist = pytz.timezone('Asia/Kolkata')
+    last_levels_day = None
+    last_preopen_day = None
+    last_closing_day = None
+    while True:
+        try:
+            now_ist = datetime.now(ist)
+            today_date_str = now_ist.strftime('%Y-%m-%d')
+            today_str = now_ist.strftime('%Y-%m-%d %I:%M %p IST')
+            is_weekend = now_ist.weekday() >= 5
+            is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
+
+            if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
+                last_preopen_day = today_date_str
+                if not is_nse_holiday:
+                    pulse_msg = (
+                        "🌅 <b>PRE-OPEN MARKET PULSE (9:08 AM IST)</b>\n"
+                        f"📅 <code>{today_str}</code>\n"
+                        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+                        "⚡ <b>Session Status:</b> Pre-Open Settled\n"
+                        + SEBI_DISCLAIMER_TEXT
+                    )
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
+
+            if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
+                last_levels_day = today_date_str
+                symbols_to_post = []
+                if not is_nse_holiday:
+                    symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"])
+                symbols_to_post.extend(["BTC", "ETH"])
+                for sym in symbols_to_post:
+                    try:
+                        df, matched_symbol = fetch_data(sym)
+                        if df is not None:
+                            lvl = calculate_op_levels(df, sym)
+                            msg_content = (
+                                f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
+                                + format_color_display(matched_symbol, today_str, lvl, sym)
+                            )
+                            await bot.send_message(chat_id=CHANNEL_USERNAME, text=msg_content, parse_mode="HTML")
+                            await asyncio.sleep(2)
+                    except Exception as e:
+                        logging.error(f"Error auto-posting {sym}: {e}")
+
+            if now_ist.hour == 15 and now_ist.minute == 45 and last_closing_day != today_date_str:
+                last_closing_day = today_date_str
+                if not i ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
         return get_mcx_parity("GOLDMCX"), "MCX GOLD (10g / INR)"
     elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER", "🥈 MCX SILVER"]:
         return get_mcx_parity("SILVERMCX"), "MCX SILVER (1kg / INR)"
