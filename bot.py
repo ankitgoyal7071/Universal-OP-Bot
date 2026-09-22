@@ -1,3 +1,6 @@
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
 import numpy as np
@@ -8,6 +11,19 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
+
+# Dummy Web Server to satisfy Render Web Service port check
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and healthy!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
 
 ALIAS_MAP = {
     "NIFTY": "^NSEI",
@@ -89,7 +105,6 @@ def get_mcx_parity(symbol_name):
         return None
 
     fx = float(df_fx['Close'].iloc[-1])
-    # 1 Troy Oz = 31.1035g | GoldMCX per 10g + 6% duty/premium | SilverMCX per 1kg + 6%
     multiplier = (10.0 / 31.1035) * fx * 1.06 if symbol_name == "GOLDMCX" else (1000.0 / 31.1035) * fx * 1.06
 
     res = pd.DataFrame(index=df_com.index)
@@ -181,6 +196,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_ticker(update, query)
 
 def main():
+    threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
