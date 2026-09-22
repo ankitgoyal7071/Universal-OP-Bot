@@ -298,7 +298,6 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Matplotlib 9-Column HD Image Generator with Dynamic Live Spot Pricing for Each Index
 def generate_autotrender_image(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -482,5 +481,305 @@ async def auto_post_scheduler_loop(bot):
             if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
                 last_preopen_day = today_date_str
                 if not is_nse_holiday:
-                    pulse_msg = (
-     
+                    pulse_msg = f"🌅 <b>PRE-OPEN MARKET PULSE (9:08 AM IST)</b>\n📅 <code>{today_str}</code>\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n⚡ <b>Session Status:</b> Pre-Open Settled{SEBI_DISCLAIMER_TEXT}"
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
+
+            if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
+                last_levels_day = today_date_str
+                symbols_to_post = []
+                if not is_nse_holiday:
+                    symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"])
+                symbols_to_post.extend(["BTC", "ETH"])
+                for sym in symbols_to_post:
+                    try:
+                        df, matched_symbol = fetch_data(sym)
+                        if df is not None:
+                            lvl = calculate_op_levels(df, sym)
+                            msg_content = (
+                                f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
+                                + format_color_display(matched_symbol, today_str, lvl, sym)
+                            )
+                            await bot.send_message(chat_id=CHANNEL_USERNAME, text=msg_content, parse_mode="HTML")
+                            await asyncio.sleep(2)
+                    except Exception as e:
+                        logging.error(f"Error auto-posting {sym}: {e}")
+
+            if now_ist.hour == 15 and now_ist.minute == 45 and last_closing_day != today_date_str:
+                last_closing_day = today_date_str
+                if not is_nse_holiday:
+                    closing_report = f"📯 <b>DAILY MARKET CLOSING SUMMARY (3:45 PM)</b>\n📅 <code>{today_str}</code>\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>{SEBI_DISCLAIMER_TEXT}"
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=closing_report, parse_mode="HTML")
+
+            await asyncio.sleep(30)
+        except Exception as e:
+            logging.error(f"Error in scheduler loop: {e}")
+            await asyncio.sleep(30)
+
+async def send_how_to_use(update: Update):
+    guide_text = (
+        "📖 <b>Universal OP Bot User Guide:</b>\n\n"
+        "<b>1️⃣ 📊 OP Levels Tab:</b> NIFTY, BANK NIFTY, FIN NIFTY, SENSEX, MIDCAP NIFTY levels.\n"
+        "<b>2️⃣ 📈 Autotrender Tab:</b> HD Image Dashboard with Call, Put, PCR & Price.\n"
+        "<b>3️⃣ 🥇 Commodity Tab:</b> MCX Gold, Silver calculations.\n"
+        "<b>4️⃣ 👥 VIP Fast Pass:</b> 3 dosto ko share karke 30s timer band karein."
+        + SEBI_DISCLAIMER_TEXT
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
+    if update.message:
+        await update.message.reply_text(guide_text, parse_mode="HTML", reply_markup=markup)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(guide_text, parse_mode="HTML", reply_markup=markup)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    save_user(user_id)
+    if context.args and context.args[0].startswith("ref_"):
+        try:
+            record_referral(int(context.args[0].replace("ref_", "")), user_id)
+        except Exception:
+            pass
+
+    subscribed = await is_user_subscribed(context.bot, user_id)
+    if not subscribed:
+        msg = (
+            "⚠️ <b>चैनल जॉइन करना अनिवार्य है!</b>\n\nबॉट का उपयोग करने के लिए चैनल जॉइन करें।"
+            + SEBI_DISCLAIMER_TEXT
+        )
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
+        return
+
+    vip_badge = "👑 <b>VIP Status: ACTIVE (Instant Access)</b>\n" if is_vip_user(user_id) else ""
+    msg = (
+        f"👋 <b>Universal OP Bot Pro Suite</b>\n\n"
+        f"{vip_badge}"
+        "नीचे दिए गए Tabs में से चुनें:"
+        + SEBI_DISCLAIMER_TEXT
+    )
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+
+async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot_me = await context.bot.get_me()
+    ref_link = f"https://t.me/{bot_me.username}?start=ref_{user_id}"
+    refs = load_data(REFERRALS_FILE, {})
+    user_invites = len(refs.get(str(user_id), []))
+    status_str = "✅ <b>VIP Unlocked!</b>" if user_invites >= 3 else f"⏳ <b>{3 - user_invites} और दोस्त चाहिए!</b>"
+
+    msg = (
+        "👥 <b>VIP REFERRAL SYSTEM</b>\n\n"
+        f"🔗 <code>{ref_link}</code>\n\n"
+        f"📊 रेफर्स: <code>{user_invites} / 3</code> | {status_str}"
+        + SEBI_DISCLAIMER_TEXT
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 Share Link", url=f"https://t.me/share/url?url={ref_link}&text=Get%20Free%20Intraday%20Levels!")]])
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
+
+async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("🧮 उपयोग: <code>/calc 50000 2</code>", parse_mode="HTML")
+        return
+    try:
+        cap, risk_pct = float(context.args[0]), float(context.args[1])
+        risk_amt = round(cap * (risk_pct / 100.0), 2)
+        nifty_lots = max(1, int(risk_amt / 500))
+        res_msg = (
+            f"🧮 <b>RISK MANAGEMENT</b>\n\n💵 Capital: ₹{cap:,.2f}\n⚠️ Risk ({risk_pct}%): ₹{risk_amt:,.2f}\n📊 Nifty Lots: {nifty_lots}"
+            + SEBI_DISCLAIMER_TEXT
+        )
+        await update.message.reply_text(res_msg, parse_mode="HTML")
+    except Exception:
+        await update.message.reply_text("❌ उदाहरण: <code>/calc 50000 2</code>", parse_mode="HTML")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    users, refs = load_data(USERS_FILE, []), load_data(REFERRALS_FILE, {})
+    await update.message.reply_text(f"📊 <b>Stats:</b>\n👥 Users: {len(users)}\n🔗 Referrers: {len(refs)}", parse_mode="HTML")
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID or not context.args:
+        return
+    text_to_broadcast = " ".join(context.args) + SEBI_DISCLAIMER_TEXT
+    users = load_data(USERS_FILE, [])
+    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट जारी है...")
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=text_to_broadcast, parse_mode="HTML")
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+    await status_msg.edit_text("✅ ब्रॉडकास्ट पूर्ण!")
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    save_user(user_id)
+    data = query.data
+
+    if data == "check_joined":
+        await query.answer()
+        if await is_user_subscribed(context.bot, user_id):
+            await query.message.delete()
+            await query.message.reply_text("✅ <b>सफल!</b> नीचे दिए गए Tabs से चुनें:", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+        else:
+            await query.message.reply_text("❌ कृपया चैनल जॉइन करें!", reply_markup=get_force_sub_markup(), parse_mode="HTML")
+
+    elif data.startswith("at_"):
+        parts = data.split("_")
+        tf, sym = int(parts[1]), parts[2]
+        await query.answer(f"⏳ Generating {tf}-Min HD Dashboard...")
+        
+        img_buf = generate_autotrender_image(sym, tf)
+        
+        caption_text = (
+            f"📊 <b>HD Autotrender Dashboard / {sym} ({tf}m)</b>\n"
+            f"📅 <code>{datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y-%m-%d')}</code>"
+            + SEBI_DISCLAIMER_TEXT
+        )
+        switch_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Switch to 5m", callback_data=f"at_5_{sym}"), InlineKeyboardButton("📈 Switch to 15m", callback_data=f"at_15_{sym}")],
+            [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]
+        ])
+        
+        await query.message.reply_photo(photo=InputFile(img_buf, filename="autotrender.png"), caption=caption_text, parse_mode="HTML", reply_markup=switch_markup)
+
+    elif data.startswith("lvl_"):
+        symbol = data.replace("lvl_", "").strip()
+        if not await is_user_subscribed(context.bot, user_id):
+            await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
+            return
+        await query.answer()
+        await query.message.delete()
+        status_msg = await context.bot.send_message(chat_id=user_id, text=f"⏳ <b>{symbol}</b> लेवल्स लोड हो रहे हैं...", parse_mode="HTML")
+        try:
+            df, matched_symbol = fetch_data(symbol)
+            if df is None:
+                await status_msg.edit_text("❌ डेटा नहीं मिला।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML")
+                return
+            lvl = calculate_op_levels(df, symbol)
+            ist = pytz.timezone('Asia/Kolkata')
+            formatted_msg = format_color_display(matched_symbol, datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST'), lvl, symbol)
+            buttons = []
+            if lvl.get("is_major_index"):
+                buttons.append([InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{symbol}")])
+            buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
+            await status_msg.delete()
+            await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            await status_msg.edit_text("❌ समस्या आई।" + SEBI_DISCLAIMER_TEXT)
+
+def make_big_timer_box(sec_left):
+    bar = "■" * int((30 - sec_left) / 3) + "□" * (10 - int((30 - sec_left) / 3))
+    return f"⏱️ REMAINING : [ {sec_left:02d}s ]\n📊 PROGRESS : [{bar}]"
+
+async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
+    for sec_left in range(27, -1, -3):
+        await asyncio.sleep(3)
+        if sec_left > 0:
+            box = make_big_timer_box(sec_left)
+            try:
+                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"📊 <b>{query_symbol} • VERIFICATION</b>\n\n<pre>{box}</pre>" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"👉 Open Channel ({sec_left:02d}s)", url=CHANNEL_LINK)]]))
+            except Exception:
+                pass
+    final_text = f"🎉 <b>{query_symbol} • UNLOCKED!</b>" + SEBI_DISCLAIMER_TEXT
+    unlocked_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🚀 GET LEVELS NOW", callback_data=f"lvl_{query_symbol}")]
+    ])
+    try:
+        await bot.get_bot().edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode="HTML", reply_markup=unlocked_markup)
+    except Exception:
+        pass
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    save_user(user_id)
+    raw_text = update.message.text.strip()
+    if raw_text.startswith("/"):
+        return
+
+    if raw_text in ["🔙 Main Menu", "MAIN MENU"]:
+        await update.message.reply_text("🏠 <b>Main Menu:</b>", parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+        return
+    if "OP LEVELS TAB" in raw_text.upper():
+        await update.message.reply_text("📊 <b>OP Levels Tab:</b> इंडेक्स चुनें:", parse_mode="HTML", reply_markup=get_op_levels_keyboard())
+        return
+    if "AUTOTRENDER TAB" in raw_text.upper():
+        await update.message.reply_text("📈 <b>Autotrender Tab:</b> टाइमफ्रेम चुनें:", parse_mode="HTML", reply_markup=get_autotrender_menu_keyboard())
+        return
+    if "COMMODITY TAB" in raw_text.upper():
+        await update.message.reply_text("🥇 <b>Commodity Tab:</b>", parse_mode="HTML", reply_markup=get_commodity_keyboard())
+        return
+    
+    if "15-MIN" in raw_text.upper():
+        pcr_index_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("NIFTY 50", callback_data="at_15_NIFTY"), InlineKeyboardButton("BANK NIFTY", callback_data="at_15_BANKNIFTY")],
+            [InlineKeyboardButton("FIN NIFTY", callback_data="at_15_FINNIFTY"), InlineKeyboardButton("SENSEX", callback_data="at_15_SENSEX")],
+            [InlineKeyboardButton("MIDCAP NIFTY", callback_data="at_15_MIDCPNIFTY")]
+        ])
+        await update.message.reply_text("⏱️ <b>Autotrender 15-Min:</b> इंडेक्स चुनें:", parse_mode="HTML", reply_markup=pcr_index_markup)
+        return
+    elif "5-MIN" in raw_text.upper():
+        pcr_index_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("NIFTY 50", callback_data="at_5_NIFTY"), InlineKeyboardButton("BANK NIFTY", callback_data="at_5_BANKNIFTY")],
+            [InlineKeyboardButton("FIN NIFTY", callback_data="at_5_FINNIFTY"), InlineKeyboardButton("SENSEX", callback_data="at_5_SENSEX")],
+            [InlineKeyboardButton("MIDCAP NIFTY", callback_data="at_5_MIDCPNIFTY")]
+        ])
+        await update.message.reply_text("⏱️ <b>Autotrender 5-Min:</b> इंडेक्स चुनें:", parse_mode="HTML", reply_markup=pcr_index_markup)
+        return
+
+    if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
+        await send_how_to_use(update)
+        return
+    if "VIP REFERRAL LINK" in raw_text.upper():
+        await referral_command(update, context)
+        return
+    if "LOT SIZE CALCULATOR" in raw_text.upper():
+        await calc_command(update, context)
+        return
+    if "OFFICIAL CHANNEL" in raw_text.upper():
+        await update.message.reply_text("📢 ऑफिशियल चैनल:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)]]), parse_mode="HTML")
+        return
+
+    clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip().upper()
+    if not await is_user_subscribed(context.bot, user_id):
+        await update.message.reply_text("🔒 पहले चैनल जॉइन करें।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML", reply_markup=get_force_sub_markup())
+        return
+
+    if is_vip_user(user_id):
+        status_msg = await update.message.reply_text(f"⚡ <b>VIP Access:</b> लोड हो रहा है...", parse_mode="HTML")
+        df, matched_symbol = fetch_data(clean_symbol)
+        if df is not None:
+            lvl = calculate_op_levels(df, clean_symbol)
+            ist = pytz.timezone('Asia/Kolkata')
+            formatted_msg = format_color_display(matched_symbol, datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST'), lvl, clean_symbol)
+            buttons = []
+            if lvl.get("is_major_index"):
+                buttons.append([InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol}")])
+            buttons.append([InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)])
+            await status_msg.delete()
+            await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+
+    sent_msg = await update.message.reply_text(f"📊 <b>{clean_symbol} • VERIFICATION</b>\n\n<pre>{make_big_timer_box(30)}</pre>" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Open Channel (30s)", url=CHANNEL_LINK)]]))
+    asyncio.create_task(live_countdown_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, clean_symbol))
+
+async def post_init(application):
+    asyncio.create_task(auto_post_scheduler_loop(application.bot))
+
+def main():
+    threading.Thread(target=run_web_server, daemon=True).start()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("ref", referral_command))
+    app.add_handler(CommandHandler("calc", calc_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
+    print("Bot is polling live with fully fixed syntax and clean handlers...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
