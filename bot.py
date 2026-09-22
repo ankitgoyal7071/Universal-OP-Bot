@@ -1,5 +1,4 @@
 import logging
-import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -25,14 +24,9 @@ ALIAS_MAP = {
     "NATURALGAS": "NG=F",
     "COPPER": "HG=F",
     "BTC": "BTC-USD",
-    "BITCOIN": "BTC-USD",
     "ETH": "ETH-USD",
-    "ETHEREUM": "ETH-USD",
     "SOL": "SOL-USD",
-    "DOGE": "DOGE-USD",
     "USDINR": "USDINR=X",
-    "EURINR": "EURINR=X",
-    "GBPINR": "GBPINR=X",
     "GOLDBEES": "GOLDBEES.NS",
     "SILVERBEES": "SILVERBEES.NS"
 }
@@ -49,12 +43,10 @@ def calculate_op_levels(df):
     dlow = float(df['Low'].iloc[-2])
 
     closes = df['Close'].iloc[-12:-1].values
-
     log_returns = [np.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
     avg_logg0 = sum(log_returns) / 10.0
     sq_sum0 = sum([x**2 for x in log_returns]) / 10.0
     volatility0 = np.sqrt(max(0, sq_sum0 - (avg_logg0**2)))
-    
     range11 = round(dc * volatility0)
 
     if abs(dop - dc) > (0.382 * range11):
@@ -64,7 +56,6 @@ def calculate_op_levels(df):
 
     logg = np.log(doKdc / closes[-2])
     adjusted_logs = [logg] + log_returns[:-1]
-    
     avg_logg = sum(adjusted_logs) / 10.0
     sq_sum = sum([x**2 for x in adjusted_logs]) / 10.0
     volatility = np.sqrt(max(0, sq_sum - (avg_logg**2)))
@@ -74,101 +65,57 @@ def calculate_op_levels(df):
     bc = round((dhigh + dlow) / 2)
     tc = round((pivot - bc) + pivot)
 
-    # Buy Levels & 10 Targets
-    b_above = round(doKdc + (range1 * 0.236))
-    b_conf  = round(doKdc + (range1 * 0.382))
-    bt1     = round(doKdc + (range1 * 0.500))
-    bt2     = round(doKdc + (range1 * 0.618))
-    bt3     = round(doKdc + (range1 * 0.786))
-    bt4     = round(doKdc + (range1 * 1.000))
-    bt5     = round(doKdc + (range1 * 1.272))
-    bt6     = round(doKdc + (range1 * 1.618))
-    bt7     = round(doKdc + (range1 * 2.000))
-    bt8     = round(doKdc + (range1 * 2.272))
-    bt9     = round(doKdc + (range1 * 2.618))
-    bt10    = round(doKdc + (range1 * 3.000))
-
-    # Sell Levels & 10 Targets
-    s_below = round(doKdc - (range1 * 0.236))
-    s_conf  = round(doKdc - (range1 * 0.382))
-    st1     = round(doKdc - (range1 * 0.500))
-    st2     = round(doKdc - (range1 * 0.618))
-    st3     = round(doKdc - (range1 * 0.786))
-    st4     = round(doKdc - (range1 * 1.000))
-    st5     = round(doKdc - (range1 * 1.272))
-    st6     = round(doKdc - (range1 * 1.618))
-    st7     = round(doKdc - (range1 * 2.000))
-    st8     = round(doKdc - (range1 * 2.272))
-    st9     = round(doKdc - (range1 * 2.618))
-    st10    = round(doKdc - (range1 * 3.000))
+    targets = {}
+    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
+    for idx, r in enumerate(ratios, 1):
+        targets[f"bt{idx}"] = round(doKdc + (range1 * r))
+        targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
     return {
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
-        "b_above": b_above, "b_conf": b_conf,
-        "bt1": bt1, "bt2": bt2, "bt3": bt3, "bt4": bt4, "bt5": bt5,
-        "bt6": bt6, "bt7": bt7, "bt8": bt8, "bt9": bt9, "bt10": bt10,
-        "s_below": s_below, "s_conf": s_conf,
-        "st1": st1, "st2": st2, "st3": st3, "st4": st4, "st5": st5,
-        "st6": st6, "st7": st7, "st8": st8, "st9": st9, "st10": st10
+        "b_above": round(doKdc + (range1 * 0.236)),
+        "b_conf": round(doKdc + (range1 * 0.382)),
+        "s_below": round(doKdc - (range1 * 0.236)),
+        "s_conf": round(doKdc - (range1 * 0.382)),
+        **targets
     }
 
-def get_mcx_converted_data(symbol_type):
-    # Fetch global commodity + USDINR for domestic parity
-    com_symbol = "GC=F" if symbol_type == "GOLDMCX" else "SI=F"
-    df_com = yf.Ticker(com_symbol).history(period="3mo", interval="1d")
-    df_inr = yf.Ticker("USDINR=X").history(period="3mo", interval="1d")
+def get_mcx_parity(symbol_name):
+    target_ticker = "GC=F" if symbol_name == "GOLDMCX" else "SI=F"
+    df_com = yf.Ticker(target_ticker).history(period="1mo", interval="1d")
+    df_fx = yf.Ticker("USDINR=X").history(period="1mo", interval="1d")
 
-    if isinstance(df_com.columns, pd.MultiIndex):
-        df_com.columns = df_com.columns.get_level_values(0)
-    if isinstance(df_inr.columns, pd.MultiIndex):
-        df_inr.columns = df_inr.columns.get_level_values(0)
-
-    # Sync dates
-    df_com = df_com.dropna()
-    df_inr = df_inr.dropna()
-    common_idx = df_com.index.intersection(df_inr.index)
-    
-    if len(common_idx) < 12:
+    if df_com.empty or df_fx.empty:
         return None
 
-    df_com = df_com.loc[common_idx]
-    df_inr = df_inr.loc[common_idx]
+    fx = float(df_fx['Close'].iloc[-1])
+    # 1 Troy Oz = 31.1035g | GoldMCX per 10g + 6% duty/premium | SilverMCX per 1kg + 6%
+    multiplier = (10.0 / 31.1035) * fx * 1.06 if symbol_name == "GOLDMCX" else (1000.0 / 31.1035) * fx * 1.06
 
-    # Formula:
-    # 1 Troy Oz = 31.1035 grams
-    # Gold MCX (per 10g) = (USD_price / 31.1035) * USDINR * 10 * 1.06 (customs/cess/premium)
-    # Silver MCX (per 1kg) = (USD_price / 31.1035) * USDINR * 1000 * 1.06
-    factor = (10.0 / 31.1035) * 1.06 if symbol_type == "GOLDMCX" else (1000.0 / 31.1035) * 1.06
-
-    converted = pd.DataFrame(index=common_idx)
-    converted['Open'] = df_com['Open'] * df_inr['Open'] * factor
-    converted['High'] = df_com['High'] * df_inr['High'] * factor
-    converted['Low'] = df_com['Low'] * df_inr['Low'] * factor
-    converted['Close'] = df_com['Close'] * df_inr['Close'] * factor
-
-    return converted
+    res = pd.DataFrame(index=df_com.index)
+    res['Open'] = df_com['Open'] * multiplier
+    res['High'] = df_com['High'] * multiplier
+    res['Low'] = df_com['Low'] * multiplier
+    res['Close'] = df_com['Close'] * multiplier
+    return res
 
 def fetch_data(symbol):
-    sym_upper = symbol.upper()
-    
-    if sym_upper in ["GOLDMCX", "MCXGOLD"]:
-        df = get_mcx_converted_data("GOLDMCX")
+    sym_u = symbol.upper()
+    if sym_u in ["GOLDMCX", "MCXGOLD"]:
+        df = get_mcx_parity("GOLDMCX")
         return df, "MCX GOLD (10g / INR)"
-    elif sym_upper in ["SILVERMCX", "MCXSILVER"]:
-        df = get_mcx_converted_data("SILVERMCX")
+    elif sym_u in ["SILVERMCX", "MCXSILVER"]:
+        df = get_mcx_parity("SILVERMCX")
         return df, "MCX SILVER (1kg / INR)"
 
-    sym = ALIAS_MAP.get(sym_upper, sym_upper)
-    symbols_to_try = [sym]
-    if not any(sym.endswith(ext) for ext in [".NS", ".BO", "=F", "=X", "-USD"]) and not sym.startswith("^"):
-        symbols_to_try.append(f"{sym}.NS")
-        symbols_to_try.append(f"{sym}.BO")
-        symbols_to_try.append(f"{sym}-USD")
+    resolved = ALIAS_MAP.get(sym_u, sym_u)
+    candidates = [resolved]
+    if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
+        candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
 
-    for s in symbols_to_try:
+    for s in candidates:
         try:
-            ticker = yf.Ticker(s)
-            df = ticker.history(period="3mo", interval="1d")
+            df = yf.Ticker(s).history(period="3mo", interval="1d")
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.dropna()
@@ -180,7 +127,7 @@ def fetch_data(symbol):
 
 def build_table(lvl):
     w1, w2 = 16, 12
-    table_lines = [
+    lines = [
         f"┌{'─'*w1}┬{'─'*w2}┐",
         f"│ {'LEVEL TYPE':<{w1-2}} │ {'PRICE':<{w2-2}} │",
         f"├{'─'*w1}┼{'─'*w2}┤",
@@ -190,88 +137,52 @@ def build_table(lvl):
         f"│ Range          │ {lvl['range']:<{w2-2}} │",
         f"├{'─'*w1}┼{'─'*w2}┤",
         f"│ BUY ABOVE      │ {lvl['b_above']:<{w2-2}} │",
-        f"│ Buy Confirm    │ {lvl['b_conf']:<{w2-2}} │",
-        f"│ Target 1       │ {lvl['bt1']:<{w2-2}} │",
-        f"│ Target 2       │ {lvl['bt2']:<{w2-2}} │",
-        f"│ Target 3       │ {lvl['bt3']:<{w2-2}} │",
-        f"│ Target 4       │ {lvl['bt4']:<{w2-2}} │",
-        f"│ Target 5       │ {lvl['bt5']:<{w2-2}} │",
-        f"│ Target 6       │ {lvl['bt6']:<{w2-2}} │",
-        f"│ Target 7       │ {lvl['bt7']:<{w2-2}} │",
-        f"│ Target 8       │ {lvl['bt8']:<{w2-2}} │",
-        f"│ Target 9       │ {lvl['bt9']:<{w2-2}} │",
-        f"│ Target 10      │ {lvl['bt10']:<{w2-2}} │",
-        f"├{'─'*w1}┼{'─'*w2}┤",
-        f"│ SELL BELOW     │ {lvl['s_below']:<{w2-2}} │",
-        f"│ Sell Confirm   │ {lvl['s_conf']:<{w2-2}} │",
-        f"│ Target 1       │ {lvl['st1']:<{w2-2}} │",
-        f"│ Target 2       │ {lvl['st2']:<{w2-2}} │",
-        f"│ Target 3       │ {lvl['st3']:<{w2-2}} │",
-        f"│ Target 4       │ {lvl['st4']:<{w2-2}} │",
-        f"│ Target 5       │ {lvl['st5']:<{w2-2}} │",
-        f"│ Target 6       │ {lvl['st6']:<{w2-2}} │",
-        f"│ Target 7       │ {lvl['st7']:<{w2-2}} │",
-        f"│ Target 8       │ {lvl['st8']:<{w2-2}} │",
-        f"│ Target 9       │ {lvl['st9']:<{w2-2}} │",
-        f"│ Target 10      │ {lvl['st10']:<{w2-2}} │",
-        f"└{'─'*w1}┴{'─'*w2}┘"
+        f"│ Buy Confirm    │ {lvl['b_conf']:<{w2-2}} │"
     ]
-    return "\n".join(table_lines)
+    for i in range(1, 11):
+        lines.append(f"│ Target {i:<7} │ {lvl[f'bt{i}']:<{w2-2}} │")
+    lines.append(f"├{'─'*w1}┼{'─'*w2}┤")
+    lines.append(f"│ SELL BELOW     │ {lvl['s_below']:<{w2-2}} │")
+    lines.append(f"│ Sell Confirm   │ {lvl['s_conf']:<{w2-2}} │")
+    for i in range(1, 11):
+        lines.append(f"│ Target {i:<7} │ {lvl[f'st{i}']:<{w2-2}} │")
+    lines.append(f"└{'─'*w1}┴{'─'*w2}┘")
+    return "\n".join(lines)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "👋 <b>Universal Daily OP Calculator Bot</b>\n\n"
-        "Aap kisi bhi stock, index, crypto ya commodity ka naam bhejein.\n\n"
-        "<b>Indian Commodities (INR):</b>\n"
-        "• <code>GOLDMCX</code> (Gold per 10g in ₹)\n"
-        "• <code>SILVERMCX</code> (Silver per 1kg in ₹)\n"
-        "• <code>GOLDBEES</code> / <code>SILVERBEES</code> (NSE Spot)\n\n"
-        "<b>Indices & Stocks:</b>\n"
+        "Universal Daily OP Calculator Bot\n\n"
+        "Direct commands:\n"
+        "• <code>GOLDMCX</code> (Gold 10g in INR)\n"
+        "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
         "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
-        "• <code>RELIANCE</code>, <code>TCS</code>, <code>SBIN</code>\n\n"
-        "<b>Global / Crypto:</b>\n"
-        "• <code>GOLD</code>, <code>SILVER</code>, <code>CRUDE</code>\n"
-        "• <code>BTC</code>, <code>ETH</code>"
+        "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def process_ticker(update: Update, query: str):
-    await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
+    await update.message.reply_text(f"Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
     df, matched_symbol = fetch_data(query)
 
     if df is None:
-        await update.message.reply_text(
-            f"❌ Symbol <code>{query}</code> ka data fetch nahi ho paya. Sahi ticker name check karein.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"Symbol <code>{query}</code> ka data fetch nahi ho paya.", parse_mode="HTML")
         return
 
     lvl = calculate_op_levels(df)
     ist = pytz.timezone('Asia/Kolkata')
     today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-    
     table = build_table(lvl)
-    header = f"📊 <b>{matched_symbol} • OP LEVELS</b>\n📅 <code>{today_str}</code>\n"
-    msg = f"{header}<pre>{table}</pre>"
-
+    msg = f"<b>{matched_symbol} • OP LEVELS</b>\n<code>{today_str}</code>\n<pre>{table}</pre>"
     await update.message.reply_text(msg, parse_mode="HTML")
-
-async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Symbol saath me likhein: <code>/level RELIANCE</code>", parse_mode="HTML")
-        return
-    await process_ticker(update, context.args[0])
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
-    if query.startswith("/"):
-        return
-    await process_ticker(update, query)
+    if not query.startswith("/"):
+        await process_ticker(update, query)
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("level", level_command))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     print("Bot is polling live...")
     app.run_polling()
