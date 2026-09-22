@@ -13,20 +13,16 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# टोकन और एडमिन आईडी (आपकी आईडी: 1612210913)
 TELEGRAM_BOT_TOKEN = "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# 30 सेकंड का अनिवार्य विज़िट टाइमर
 MANDATORY_VISIT_SECONDS = 30
 
-# यूज़र्स का डेटाबेस (Broadcast और Stats के लिए)
 USERS_FILE = "bot_users.json"
 
-# अनिवार्य SEBI डिस्क्लेमर जो हर मैसेज के साथ रहेगा
 SEBI_DISCLAIMER_TEXT = (
     "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
     "⚖️ <b>SEBI REGULATORY DISCLAIMER:</b>\n"
@@ -266,10 +262,7 @@ async def send_how_to_use(update: Update):
         "<b>2️⃣ स्टेप 2 (चैनल पर जाएँ):</b>\n"
         "<b>'👉 1. Visit Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ और लेटेस्ट स्पॉन्सर पोस्ट देखें।\n\n"
         "<b>3️⃣ स्टेप 3 (30 सेकंड लाइव काउंटडाउन):</b>\n"
-        "चैनल पर कम से कम 30 सेकंड रुकें। बॉट में लाइव काउंटडाउन चलेगा:\n"
-        "• ⏳ <code>Ad Verification in progress... [30s]</code>\n"
-        "• ⌛ <code>Please stay on channel & view post... [15s]</code>\n"
-        "• 💚 <code>Verified! Unlocking levels now... [0s]</code>\n\n"
+        "बटन और स्क्रीन दोनों पर लाइव हाईलाइटेड काउंटडाउन बॉक्स दिखेगा (30s ➔ 15s ➔ 0s)।\n\n"
         "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
         "30 सेकंड पूरे होते ही <b>'✅ 2. Get Levels (Unblocked 🎉)'</b> बटन प्रकट होगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
         + SEBI_DISCLAIMER_TEXT
@@ -303,7 +296,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_keyboard())
 
-# एडमिन स्टैट्स कमांड (/stats)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -315,7 +307,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-# एडमिन ब्रॉडकास्ट कमांड (/broadcast <संदेश>)
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -330,15 +321,12 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text_to_broadcast = " ".join(context.args)
-    # ब्रॉडकास्ट के नीचे भी SEBI डिस्क्लेमर जुड़ेगा
     final_broadcast_msg = text_to_broadcast + SEBI_DISCLAIMER_TEXT
-
     users = load_users()
     sent_count = 0
     failed_count = 0
 
     status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट भेजा जा रहा है... (कुल {len(users)} यूज़र्स को)")
-
     channel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
 
     for uid in users:
@@ -350,15 +338,15 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=channel_markup
             )
             sent_count += 1
-            await asyncio.sleep(0.05)  # Telegram API limit safety
+            await asyncio.sleep(0.05)
         except Exception:
             failed_count += 1
             continue
 
     await status_msg.edit_text(
         f"✅ <b>ब्रॉडकास्ट सफलतापूर्वक पूरा हुआ!</b>\n\n"
-        f"✔️ सफलतापूर्वक भेजा गया: <b>{sent_count}</b> यूज़र्स को\n"
-        f"❌ असफल (Blocked/Deleted): <b>{failed_count}</b>\n"
+        f"✔️ भेजा गया: <b>{sent_count}</b> यूज़र्स को\n"
+        f"❌ असफल: <b>{failed_count}</b>\n"
         f"👥 कुल डेटाबेस: <b>{len(users)}</b>", 
         parse_mode="HTML"
     )
@@ -429,53 +417,58 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। / Error calculating levels." + SEBI_DISCLAIMER_TEXT)
 
 async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
-    """3-स्टेप विज़ुअल काउंटडाउन: 30s ➔ 15s ➔ 0s"""
-    steps = [
-        (15, "⌛", "Please stay on channel & view sponsor post...", "15s remaining", "चैनल पर बने रहें, स्पॉन्सर पोस्ट वेरिफिकेशन जारी है..."),
-        (15, "💚", "Verified! Unlocking levels now...", "0s", "सत्यापन सफल हुआ! लेवल्स अनलॉक किए जा रहे हैं...")
+    """हाईलाइटेड डिजिटल बॉक्स और बटन लाइव टाइमर के साथ काउंटडाउन"""
+    intervals = [
+        (10, 20, "🟧🟧⬛⬛⬛", "👉 1. Open Channel & View Ad (20s)"),
+        (10, 10, "🟩🟩🟩⬛⬛", "👉 1. Open Channel & View Ad (10s)"),
+        (10, 0,  "🟩🟩🟩🟩🟩", "✅ Verification Completed!")
     ]
-    
-    channel_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
-    ])
 
-    for sleep_time, icon, status_head, time_rem, subtext in steps:
-        await asyncio.sleep(sleep_time)
-        full_text = (
-            f"📊 <b>{query_symbol} के लेवल्स तैयार हो रहे हैं!</b>\n\n"
-            f"1. ऊपर दिए बटन से चैनल पर जाएँ और प्रायोजित विज्ञापन देखें।\n\n"
-            f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-            f"{icon} <b>Status:</b> {status_head}\n"
-            f"⏱️ <b>Time:</b> <code>[{time_rem}]</code>\n"
-            f"<i>{subtext}</i>\n"
-            f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>"
-            + SEBI_DISCLAIMER_TEXT
-        )
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=full_text,
-                parse_mode="HTML",
-                reply_markup=channel_markup
+    for wait_time, remaining, bar, btn_title in intervals:
+        await asyncio.sleep(wait_time)
+        if remaining > 0:
+            highlighted_box = (
+                f"┌──────────────────────────────┐\n"
+                f"│   ⏳ AD VERIFICATION TAB    │\n"
+                f"├──────────────────────────────┤\n"
+                f"│ TIME LEFT : {remaining:02d} SECONDS        │\n"
+                f"│ PROGRESS  : {bar}          │\n"
+                f"│ STATUS    : VIEWING CHANNEL  │\n"
+                f"└──────────────────────────────┘"
             )
-        except Exception:
-            pass
+            msg_text = (
+                f"📊 <b>{query_symbol} OP LEVLES • PENDING UNLOCK</b>\n\n"
+                f"<pre>{highlighted_box}</pre>\n"
+                f"👉 <b>निर्देश:</b> नीचे दिए गए बटन पर टैप करके हमारे चैनल पर जाएँ और प्रायोजित विज्ञापन/पोस्ट देखें।\n"
+                f"<i>Stay on the channel to complete verification.</i>"
+                + SEBI_DISCLAIMER_TEXT
+            )
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_title, url=CHANNEL_LINK)]])
+            try:
+                await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                pass
 
     # 30 सेकंड बाद 'Get Levels' बटन अनलॉक
-    unlocked_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Official Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ 2. Get Levels (Unblocked 🎉)", callback_data=f"lvl_{query_symbol}")]
-    ])
-    
+    unlocked_box = (
+        f"┌──────────────────────────────┐\n"
+        f"│   ✅ VERIFICATION COMPLETE   │\n"
+        f"├──────────────────────────────┤\n"
+        f"│ STATUS   : 100% SUCCESS      │\n"
+        f"│ ACCESS   : LEVELS UNLOCKED   │\n"
+        f"└──────────────────────────────┘"
+    )
     final_text = (
-        f"🎉 <b>{query_symbol} • VERIFICATION COMPLETE!</b>\n\n"
-        "💚 <b>Ad Verification: 100% Passed</b>\n"
-        "आपका 30 सेकंड का विज़िट समय पूरा हो चुका है।\n\n"
-        "👇 नीचे दिए गए बटन पर टैप करके तुरंत लेवल्स देखें:\n"
-        "<i>Click below to view full OP calculation:</i>"
+        f"🎉 <b>{query_symbol} • ACCESS GRANTED!</b>\n\n"
+        f"<pre>{unlocked_box}</pre>\n"
+        f"आपका 30 सेकंड का विज़िट समय पूरा हो चुका है।\n\n"
+        f"👇 नीचे दिए गए <b>'Get Levels'</b> बटन पर तुरंत टैप करें:"
         + SEBI_DISCLAIMER_TEXT
     )
+    unlocked_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🚀 2. GET LEVELS NOW (Unlocked 🎉)", callback_data=f"lvl_{query_symbol}")]
+    ])
     
     try:
         await bot.edit_message_text(
@@ -496,12 +489,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if raw_text.startswith("/"):
         return
 
-    # गाइड बटन
     if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
         await send_how_to_use(update)
         return
 
-    # ऑफिशियल चैनल बटन
     if "OFFICIAL CHANNEL" in raw_text.upper():
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
         await update.message.reply_text("📢 हमारे ऑफिशियल चैनल से जुड़ें जहाँ डेली मार्केट अपडेट्स और लाइव ऑप्शन डेटा मिलता है:" + SEBI_DISCLAIMER_TEXT, reply_markup=markup, parse_mode="HTML")
@@ -519,18 +510,25 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # शुरुआत का हाईलाइटेड बॉक्स
+    start_box = (
+        f"┌──────────────────────────────┐\n"
+        f"│   ⏳ AD VERIFICATION TAB    │\n"
+        f"├──────────────────────────────┤\n"
+        f"│ TIME LEFT : 30 SECONDS        │\n"
+        f"│ PROGRESS  : ⬛⬛⬛⬛⬛          │\n"
+        f"│ STATUS    : STARTING VISIT   │\n"
+        f"└──────────────────────────────┘"
+    )
     initial_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
+        [InlineKeyboardButton("👉 1. Open Channel & View Ad (30s)", url=CHANNEL_LINK)]
     ])
 
     sent_msg = await update.message.reply_text(
-        f"📊 <b>{clean_symbol} के लेवल्स तैयार हैं!</b>\n\n"
-        f"1. ऊपर दिए बटन से चैनल खोलें और प्रायोजित विज्ञापन देखें।\n\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        f"⏳ <b>Status:</b> Ad Verification in progress...\n"
-        f"⏱️ <b>Time:</b> <code>[30s remaining]</code>\n"
-        f"<i>Please stay on channel & view post...</i>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>"
+        f"📊 <b>{clean_symbol} OP LEVELS • PENDING UNLOCK</b>\n\n"
+        f"<pre>{start_box}</pre>\n"
+        f"👉 <b>निर्देश:</b> नीचे दिए गए बटन पर टैप करके हमारे चैनल पर जाएँ और प्रायोजित विज्ञापन देखें।\n"
+        f"<i>Stay on the channel for 30 seconds to unlock levels.</i>"
         + SEBI_DISCLAIMER_TEXT,
         parse_mode="HTML",
         reply_markup=initial_markup
@@ -548,7 +546,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with SEBI Disclaimer & Admin Broadcast...")
+    print("Bot is polling live with Highlighted Digital Tab & Live Button Timer...")
     app.run_polling()
 
 if __name__ == "__main__":
