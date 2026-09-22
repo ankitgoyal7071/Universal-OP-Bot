@@ -32,7 +32,9 @@ ALIAS_MAP = {
     "DOGE": "DOGE-USD",
     "USDINR": "USDINR=X",
     "EURINR": "EURINR=X",
-    "GBPINR": "GBPINR=X"
+    "GBPINR": "GBPINR=X",
+    "GOLDBEES": "GOLDBEES.NS",
+    "SILVERBEES": "SILVERBEES.NS"
 }
 
 logging.basicConfig(
@@ -110,8 +112,53 @@ def calculate_op_levels(df):
         "st6": st6, "st7": st7, "st8": st8, "st9": st9, "st10": st10
     }
 
+def get_mcx_converted_data(symbol_type):
+    # Fetch global commodity + USDINR for domestic parity
+    com_symbol = "GC=F" if symbol_type == "GOLDMCX" else "SI=F"
+    df_com = yf.Ticker(com_symbol).history(period="3mo", interval="1d")
+    df_inr = yf.Ticker("USDINR=X").history(period="3mo", interval="1d")
+
+    if isinstance(df_com.columns, pd.MultiIndex):
+        df_com.columns = df_com.columns.get_level_values(0)
+    if isinstance(df_inr.columns, pd.MultiIndex):
+        df_inr.columns = df_inr.columns.get_level_values(0)
+
+    # Sync dates
+    df_com = df_com.dropna()
+    df_inr = df_inr.dropna()
+    common_idx = df_com.index.intersection(df_inr.index)
+    
+    if len(common_idx) < 12:
+        return None
+
+    df_com = df_com.loc[common_idx]
+    df_inr = df_inr.loc[common_idx]
+
+    # Formula:
+    # 1 Troy Oz = 31.1035 grams
+    # Gold MCX (per 10g) = (USD_price / 31.1035) * USDINR * 10 * 1.06 (customs/cess/premium)
+    # Silver MCX (per 1kg) = (USD_price / 31.1035) * USDINR * 1000 * 1.06
+    factor = (10.0 / 31.1035) * 1.06 if symbol_type == "GOLDMCX" else (1000.0 / 31.1035) * 1.06
+
+    converted = pd.DataFrame(index=common_idx)
+    converted['Open'] = df_com['Open'] * df_inr['Open'] * factor
+    converted['High'] = df_com['High'] * df_inr['High'] * factor
+    converted['Low'] = df_com['Low'] * df_inr['Low'] * factor
+    converted['Close'] = df_com['Close'] * df_inr['Close'] * factor
+
+    return converted
+
 def fetch_data(symbol):
-    sym = ALIAS_MAP.get(symbol.upper(), symbol.upper())
+    sym_upper = symbol.upper()
+    
+    if sym_upper in ["GOLDMCX", "MCXGOLD"]:
+        df = get_mcx_converted_data("GOLDMCX")
+        return df, "MCX GOLD (10g / INR)"
+    elif sym_upper in ["SILVERMCX", "MCXSILVER"]:
+        df = get_mcx_converted_data("SILVERMCX")
+        return df, "MCX SILVER (1kg / INR)"
+
+    sym = ALIAS_MAP.get(sym_upper, sym_upper)
     symbols_to_try = [sym]
     if not any(sym.endswith(ext) for ext in [".NS", ".BO", "=F", "=X", "-USD"]) and not sym.startswith("^"):
         symbols_to_try.append(f"{sym}.NS")
@@ -175,11 +222,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "👋 <b>Universal Daily OP Calculator Bot</b>\n\n"
         "Aap kisi bhi stock, index, crypto ya commodity ka naam bhejein.\n\n"
-        "<b>Examples:</b>\n"
-        "• <code>RELIANCE</code> ya <code>TCS</code>\n"
-        "• <code>NIFTY</code> ya <code>BANKNIFTY</code>\n"
-        "• <code>GOLD</code> ya <code>CRUDE</code>\n"
-        "• <code>BTC</code> ya <code>ETH</code>"
+        "<b>Indian Commodities (INR):</b>\n"
+        "• <code>GOLDMCX</code> (Gold per 10g in ₹)\n"
+        "• <code>SILVERMCX</code> (Silver per 1kg in ₹)\n"
+        "• <code>GOLDBEES</code> / <code>SILVERBEES</code> (NSE Spot)\n\n"
+        "<b>Indices & Stocks:</b>\n"
+        "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
+        "• <code>RELIANCE</code>, <code>TCS</code>, <code>SBIN</code>\n\n"
+        "<b>Global / Crypto:</b>\n"
+        "• <code>GOLD</code>, <code>SILVER</code>, <code>CRUDE</code>\n"
+        "• <code>BTC</code>, <code>ETH</code>"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -226,4 +278,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
