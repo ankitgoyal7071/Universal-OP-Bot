@@ -1,5 +1,7 @@
 import os
 import json
+import secrets
+import string
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
@@ -12,33 +14,32 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
-
-# Aapka Fixed Telegram Admin ID
 ADMIN_ID = 1612210913
 
-DB_FILE = "users_db.json"
+USERS_FILE = "users_db.json"
+KEYS_FILE = "keys_db.json"
 
-def load_users():
-    if os.path.exists(DB_FILE):
+def load_data(file_path):
+    if os.path.exists(file_path):
         try:
-            with open(DB_FILE, "r") as f:
+            with open(file_path, "r") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
-def save_users(data):
+def save_data(file_path, data):
     try:
-        with open(DB_FILE, "w") as f:
+        with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
     except Exception as e:
-        logging.error(f"Error saving DB: {e}")
+        logging.error(f"Error saving {file_path}: {e}")
 
 def check_user_access(user_id):
     if user_id == ADMIN_ID:
         return True, "Admin (Lifetime Access)"
     
-    users = load_users()
+    users = load_data(USERS_FILE)
     uid_str = str(user_id)
     if uid_str not in users:
         return False, None
@@ -222,69 +223,91 @@ def format_color_display(matched_symbol, today_str, lvl):
 
     return "\n".join(out)
 
-# --- Admin Commands ---
+# --- Admin Key Generator ---
 
-async def add_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: <code>/add &lt;user_id&gt; &lt;days&gt;</code>\nExample: <code>/add 987654321 30</code>", parse_mode="HTML")
-        return
-    
-    target_uid = context.args[0].strip()
-    try:
-        days = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("Days ek valid number hona chahiye (jaise: 1, 7, 15, 30, 120, 180, 365).")
-        return
-    
-    users = load_users()
-    expiry = datetime.now() + timedelta(days=days)
-    users[target_uid] = {
-        "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"),
-        "days_given": days,
-        "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    save_users(users)
-    await update.message.reply_text(
-        f"✅ <b>Access Approved!</b>\n"
-        f"👤 User ID: <code>{target_uid}</code>\n"
-        f"⏳ Validity: <b>{days} Din</b>\n"
-        f"📅 Expiry Date: <code>{expiry.strftime('%Y-%m-%d %I:%M %p')}</code>",
-        parse_mode="HTML"
-    )
-
-async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def genkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     
     if not context.args:
-        await update.message.reply_text("Format: <code>/remove &lt;user_id&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Format: <code>/genkey &lt;days&gt;</code>\nExample: <code>/genkey 30</code>", parse_mode="HTML")
         return
     
-    target_uid = context.args[0].strip()
-    users = load_users()
-    if target_uid in users:
-        del users[target_uid]
-        save_users(users)
-        await update.message.reply_text(f"❌ User <code>{target_uid}</code> ka access revoke (block) kar diya gaya hai.", parse_mode="HTML")
-    else:
-        await update.message.reply_text("Yeh User ID database me nahi mila.")
+    try:
+        days = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Days ek number hona chahiye (jaise: 1, 7, 15, 30, 120, 180, 365).")
+        return
+    
+    # Generate random unique code
+    random_str = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
+    key_code = f"OP-{days}D-{random_str}"
+    
+    keys = load_data(KEYS_FILE)
+    keys[key_code] = {
+        "days": days,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_data(KEYS_FILE, keys)
+    
+    msg = (
+        f"🎟️ <b>New License Key Generated!</b>\n\n"
+        f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
+        f"⏳ <b>Validity:</b> {days} Din\n\n"
+        f"User ko yeh message forward karein:\n"
+        f"<i>Bot ko start karke yeh command bhejein:</i>\n"
+        f"<code>/redeem {key_code}</code>"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
 
-async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+# --- User Key Redeem ---
+
+async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    if not context.args:
+        await update.message.reply_text("Format: <code>/redeem &lt;KEY_CODE&gt;</code>\nExample: <code>/redeem OP-30D-ABC123</code>", parse_mode="HTML")
         return
-    
-    users = load_users()
-    if not users:
-        await update.message.reply_text("Filhal koi active subscriber nahi hai.")
+
+    input_key = context.args[0].strip().upper()
+    keys = load_data(KEYS_FILE)
+
+    if input_key not in keys:
+        await update.message.reply_text("❌ Galat ya expired license key. Kripya Admin se fresh key lein.", parse_mode="HTML")
         return
-    
-    msg = ["📋 <b>Active Subscribers:</b>\n"]
-    for uid, data in users.items():
-        msg.append(f"• ID: <code>{uid}</code> | Expiry: <code>{data.get('expiry')}</code> ({data.get('days_given')}D)")
-    await update.message.reply_text("\n".join(msg), parse_mode="HTML")
+
+    days = keys[input_key]["days"]
+    users = load_data(USERS_FILE)
+
+    # Expiry calculation (agar pehle se plan active hai toh aage extend ho jayega)
+    now = datetime.now()
+    if uid in users and "expiry" in users[uid]:
+        try:
+            current_expiry = datetime.strptime(users[uid]["expiry"], "%Y-%m-%d %H:%M:%S")
+            start_point = max(now, current_expiry)
+        except Exception:
+            start_point = now
+    else:
+        start_point = now
+
+    new_expiry = start_point + timedelta(days=days)
+    users[uid] = {
+        "expiry": new_expiry.strftime("%Y-%m-%d %H:%M:%S"),
+        "last_redeemed_days": days,
+        "username": update.effective_user.username or "N/A"
+    }
+    save_data(USERS_FILE, users)
+
+    # Key delete kar dein taaki dobara use na ho
+    del keys[input_key]
+    save_data(KEYS_FILE, keys)
+
+    msg = (
+        f"🎉 <b>License Activated Successfully!</b>\n\n"
+        f"⏳ <b>Added:</b> {days} Din\n"
+        f"📅 <b>Expiry:</b> <code>{new_expiry.strftime('%Y-%m-%d %I:%M %p')}</code>\n\n"
+        f"Ab aap kisi bhi stock/commodity ka naam bhej kar levels calculate kar sakte hain!"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 async def myplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -292,9 +315,7 @@ async def myplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if has_access:
         await update.message.reply_text(f"✅ <b>Subscription Status:</b> Active\n⏳ Validity: <code>{info}</code>", parse_mode="HTML")
     else:
-        await update.message.reply_text(f"❌ <b>Subscription Inactive</b>\nAapka User ID: <code>{uid}</code>\nAccess ke liye Admin se contact karein.", parse_mode="HTML")
-
-# --- User Handlers ---
+        await update.message.reply_text("❌ <b>Subscription Inactive</b>\nLicense key redeem karne ke liye: <code>/redeem KEY</code>\nKey pane ke liye Admin se contact karein.", parse_mode="HTML")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -302,10 +323,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not has_access:
         msg = (
-            "🔒 <b>Private Universal OP Calculator Bot</b>\n\n"
+            "🔒 <b>Universal OP Calculator Bot (Private)</b>\n\n"
             "Aapka subscription active nahi hai.\n\n"
-            f"🆔 <b>Aapka Telegram ID:</b> <code>{uid}</code>\n\n"
-            "Access activate karwane ke liye apna User ID Admin ko send karein."
+            "Agar aapke paas License Key hai toh activate karne ke liye type karein:\n"
+            "👉 <code>/redeem KEY_CODE</code>\n\n"
+            "Nayi key khareedne ya trial ke liye Admin se contact karein."
         )
         await update.message.reply_text(msg, parse_mode="HTML")
         return
@@ -318,7 +340,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
         "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
         "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>\n\n"
-        "Apni expiry check karne ke liye: /myplan"
+        "Plan validity check karne ke liye: /myplan"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -327,7 +349,7 @@ async def process_ticker(update: Update, query: str):
     has_access, info = check_user_access(uid)
     if not has_access:
         await update.message.reply_text(
-            f"🔒 <b>Access Denied:</b> Subscription active nahi hai.\n🆔 Aapka ID: <code>{uid}</code>",
+            "🔒 <b>Access Denied:</b> Subscription active nahi hai.\nKey redeem karne ke liye: <code>/redeem KEY</code>",
             parse_mode="HTML"
         )
         return
@@ -357,9 +379,8 @@ def main():
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("myplan", myplan_cmd))
-    app.add_handler(CommandHandler("add", add_user_cmd))
-    app.add_handler(CommandHandler("remove", remove_user_cmd))
-    app.add_handler(CommandHandler("users", list_users_cmd))
+    app.add_handler(CommandHandler("redeem", redeem_cmd))
+    app.add_handler(CommandHandler("genkey", genkey_cmd))
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     print("Bot is polling live...")
