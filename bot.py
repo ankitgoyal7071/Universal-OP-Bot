@@ -5,12 +5,13 @@ import string
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
+import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 import pytz
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
@@ -18,7 +19,9 @@ ADMIN_ID = 1612210913
 
 USERS_FILE = "users_db.json"
 KEYS_FILE = "keys_db.json"
+SETTINGS_FILE = "settings_db.json"
 
+# --- Storage Helpers ---
 def load_data(file_path):
     if os.path.exists(file_path):
         try:
@@ -60,8 +63,9 @@ def check_user_access(user_id):
     diff = expiry_date - now
     days_left = diff.days
     hours_left = int(diff.seconds / 3600)
-    return True, f"{days_left}d {hours_left}h remaining (Till: {expiry_str})"
+    return True, f"{days_left}d {hours_left}h remaining"
 
+# Dummy Web Server for Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -223,226 +227,156 @@ def format_color_display(matched_symbol, today_str, lvl):
 
     return "\n".join(out)
 
-# --- Admin Key Generator & Manager ---
+# --- GramAds / AdGram Integration ---
+def get_ad_markup(user_id):
+    settings = load_data(SETTINGS_FILE)
+    ad_token = settings.get("gramads_token")
+    if not ad_token:
+        return None
+    
+    try:
+        url = f"https://api.adgram.io/adv?token={ad_token}&user_id={user_id}"
+        resp = requests.get(url, timeout=3).json()
+        if resp.get("status") == "success" and "button" in resp:
+            title = resp["button"].get("text", "📢 Sponsored Channel")
+            link = resp["button"].get("url")
+            return InlineKeyboardMarkup([[InlineKeyboardButton(title, url=link)]])
+    except Exception:
+        pass
+    return None
+
+# --- Admin Commands ---
+
+async def setgramads_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Format: <code>/setgramads &lt;TOKEN&gt;</code>", parse_mode="HTML")
+        return
+    token = context.args[0].strip()
+    settings = load_data(SETTINGS_FILE)
+    settings["gramads_token"] = token
+    save_data(SETTINGS_FILE, settings)
+    await update.message.reply_text("✅ <b>GramAds Token Saved!</b> Live ads enabled.", parse_mode="HTML")
 
 async def genkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    
     if not context.args:
-        await update.message.reply_text("Format: <code>/genkey &lt;days&gt;</code>\nExample: <code>/genkey 30</code>", parse_mode="HTML")
+        await update.message.reply_text("Format: <code>/genkey &lt;days&gt;</code>", parse_mode="HTML")
         return
-    
     try:
         days = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Days number hona chahiye.")
         return
-    
     random_str = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
     key_code = f"OP-{days}D-{random_str}"
-    
     keys = load_data(KEYS_FILE)
-    keys[key_code] = {
-        "days": days,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    keys[key_code] = {"days": days, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     save_data(KEYS_FILE, keys)
-    
-    msg = (
-        f"🎟️ <b>New License Key Generated!</b>\n\n"
-        f"🔑 <b>Key:</b> <code>{key_code}</code>\n"
-        f"⏳ <b>Validity:</b> {days} Din\n\n"
-        f"User ko forward karein:\n"
-        f"<code>/redeem {key_code}</code>"
-    )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(f"🎟️ Key: <code>{key_code}</code>\nValidity: {days} Din\n\nForward to user:\n<code>/redeem {key_code}</code>", parse_mode="HTML")
 
 async def delkey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID or not context.args:
         return
-    
-    if not context.args:
-        await update.message.reply_text("Format: <code>/delkey &lt;KEY_CODE&gt;</code>\nExample: <code>/delkey OP-30D-XXXXXX</code>", parse_mode="HTML")
-        return
-    
-    target_key = context.args[0].strip().upper()
     keys = load_data(KEYS_FILE)
-    
-    if target_key in keys:
-        del keys[target_key]
+    k = context.args[0].strip().upper()
+    if k in keys:
+        del keys[k]
         save_data(KEYS_FILE, keys)
-        await update.message.reply_text(f"🗑️ License key <code>{target_key}</code> delete/cancel kar di gayi hai.", parse_mode="HTML")
+        await update.message.reply_text(f"🗑️ Deleted: <code>{k}</code>", parse_mode="HTML")
     else:
-        await update.message.reply_text("❌ Yeh key database me nahi mili ya pehle hi redeem ho chuki hai.")
+        await update.message.reply_text("❌ Key nahi mili.")
 
 async def deluser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID or not context.args:
         return
-    
-    if not context.args:
-        await update.message.reply_text("Format: <code>/deluser &lt;USER_ID&gt;</code>", parse_mode="HTML")
-        return
-    
-    target_uid = context.args[0].strip()
     users = load_data(USERS_FILE)
-    
-    if target_uid in users:
-        del users[target_uid]
+    uid = context.args[0].strip()
+    if uid in users:
+        del users[uid]
         save_data(USERS_FILE, users)
-        await update.message.reply_text(f"🚫 User <code>{target_uid}</code> ka subscription revoke/delete kar diya gaya hai.", parse_mode="HTML")
+        await update.message.reply_text(f"🚫 Revoked user: <code>{uid}</code>", parse_mode="HTML")
     else:
-        await update.message.reply_text("❌ Yeh user ID database me nahi mili.")
+        await update.message.reply_text("❌ User ID nahi mila.")
 
 async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    
     users = load_data(USERS_FILE)
-    if not users:
-        await update.message.reply_text("Abhi koi registered users nahi hain.", parse_mode="HTML")
-        return
-    
-    lines = ["👥 <b>REGISTERED SUBSCRIBERS</b>\n"]
-    now = datetime.now()
-
-    for uid, data in users.items():
-        uname = data.get("username", "N/A")
-        exp_str = data.get("expiry", "Unknown")
-        try:
-            exp_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-            if now > exp_dt:
-                status = "🔴 Expired"
-            else:
-                left = (exp_dt - now).days
-                status = f"🟢 Active ({left}d left)"
-        except Exception:
-            status = "⚪ Unknown"
-        
-        lines.append(f"• <b>@{uname}</b> (<code>{uid}</code>)\n  Status: {status} | Expiry: <code>{exp_str}</code>\n")
-
+    lines = ["👥 <b>Subscribers:</b>\n"]
+    for uid, d in users.items():
+        lines.append(f"• @{d.get('username')} (<code>{uid}</code>) -> {d.get('expiry')}")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def keys_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    
     keys = load_data(KEYS_FILE)
-    if not keys:
-        await update.message.reply_text("Koi unused keys nahi hain.", parse_mode="HTML")
-        return
-    
-    lines = ["🎟️ <b>AVAILABLE UNREDEEMED KEYS</b>\n"]
+    lines = ["🎟️ <b>Unredeemed Keys:</b>\n"]
     for k, v in keys.items():
-        lines.append(f"• <code>{k}</code> — <b>{v.get('days')} Din</b> (Created: {v.get('created_at')})")
-    
+        lines.append(f"• <code>{k}</code> ({v.get('days')}D)")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
-# --- User Key Redeem ---
+# --- User Handlers ---
 
 async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if not context.args:
-        await update.message.reply_text("Format: <code>/redeem &lt;KEY_CODE&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Format: <code>/redeem KEY</code>")
         return
-
-    input_key = context.args[0].strip().upper()
+    k = context.args[0].strip().upper()
     keys = load_data(KEYS_FILE)
-
-    if input_key not in keys:
-        await update.message.reply_text("❌ Galat ya expired license key.", parse_mode="HTML")
+    if k not in keys:
+        await update.message.reply_text("❌ Galat ya used key.")
         return
-
-    days = keys[input_key]["days"]
+    days = keys[k]["days"]
     users = load_data(USERS_FILE)
-
     now = datetime.now()
-    if uid in users and "expiry" in users[uid]:
-        try:
-            current_expiry = datetime.strptime(users[uid]["expiry"], "%Y-%m-%d %H:%M:%S")
-            start_point = max(now, current_expiry)
-        except Exception:
-            start_point = now
-    else:
-        start_point = now
-
-    new_expiry = start_point + timedelta(days=days)
-    users[uid] = {
-        "expiry": new_expiry.strftime("%Y-%m-%d %H:%M:%S"),
-        "last_redeemed_days": days,
-        "username": update.effective_user.username or "N/A"
-    }
+    new_expiry = now + timedelta(days=days)
+    users[uid] = {"expiry": new_expiry.strftime("%Y-%m-%d %H:%M:%S"), "username": update.effective_user.username or "N/A"}
     save_data(USERS_FILE, users)
-
-    del keys[input_key]
+    del keys[k]
     save_data(KEYS_FILE, keys)
-
-    msg = (
-        f"🎉 <b>License Activated Successfully!</b>\n\n"
-        f"⏳ <b>Added:</b> {days} Din\n"
-        f"📅 <b>Expiry:</b> <code>{new_expiry.strftime('%Y-%m-%d %I:%M %p')}</code>\n\n"
-        f"Ab aap kisi bhi stock/commodity ka naam bhej kar levels dekh sakte hain!"
-    )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(f"🎉 Activated {days} Din! Expiry: {new_expiry.strftime('%Y-%m-%d')}")
 
 async def myplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     has_access, info = check_user_access(uid)
     if has_access:
-        await update.message.reply_text(f"✅ <b>Subscription Status:</b> Active\n⏳ Validity: <code>{info}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ <b>Status:</b> Active\n⏳ Validity: <code>{info}</code>", parse_mode="HTML")
     else:
-        await update.message.reply_text("❌ <b>Subscription Inactive</b>\nRedeem karne ke liye: <code>/redeem KEY</code>", parse_mode="HTML")
+        await update.message.reply_text("❌ <b>Inactive</b>\nRedeem karne ke liye: <code>/redeem KEY</code>", parse_mode="HTML")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     has_access, info = check_user_access(uid)
-
     if not has_access:
-        msg = (
-            "🔒 <b>Universal OP Calculator Bot (Private)</b>\n\n"
-            "Aapka subscription active nahi hai.\n\n"
-            "Key activate karne ke liye type karein:\n"
-            "👉 <code>/redeem KEY_CODE</code>\n\n"
-            "Access key lene ke liye Admin se contact karein."
-        )
-        await update.message.reply_text(msg, parse_mode="HTML")
+        await update.message.reply_text("🔒 Bot is locked.\nRedeem key: <code>/redeem KEY</code>", parse_mode="HTML")
         return
-
-    msg = (
-        "👋 <b>Universal Daily OP Calculator Bot</b>\n\n"
-        f"✅ <b>Status:</b> Active (<code>{info}</code>)\n\n"
-        "Supported commands:\n"
-        "• <code>GOLDMCX</code> (Gold 10g in INR)\n"
-        "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
-        "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
-        "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>\n\n"
-        "Plan validity: /myplan"
-    )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(f"👋 Active ({info})\nCommands: GOLDMCX, SILVERMCX, NIFTY, BANKNIFTY\nValidity check: /myplan")
 
 async def process_ticker(update: Update, query: str):
     uid = update.effective_user.id
     has_access, info = check_user_access(uid)
     if not has_access:
-        await update.message.reply_text(
-            "🔒 <b>Access Denied:</b> Subscription active nahi hai.\nKey redeem karne ke liye: <code>/redeem KEY</code>",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("🔒 Subscription expired. Key redeem karein.")
         return
 
     await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
     df, matched_symbol = fetch_data(query)
-
     if df is None:
-        await update.message.reply_text(f"❌ Symbol <code>{query}</code> fetch nahi ho paya.", parse_mode="HTML")
+        await update.message.reply_text("❌ Symbol not found.")
         return
 
     lvl = calculate_op_levels(df)
     ist = pytz.timezone('Asia/Kolkata')
     today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-    
     formatted_msg = format_color_display(matched_symbol, today_str, lvl)
-    await update.message.reply_text(formatted_msg, parse_mode="HTML")
+    
+    # GramAds inline button
+    reply_markup = get_ad_markup(uid)
+    await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=reply_markup)
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
@@ -453,17 +387,15 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # User Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("myplan", myplan_cmd))
     app.add_handler(CommandHandler("redeem", redeem_cmd))
-    
-    # Admin Key & User Controls
     app.add_handler(CommandHandler("genkey", genkey_cmd))
     app.add_handler(CommandHandler("delkey", delkey_cmd))
-    app.add_handler(CommandHandler("keys", keys_cmd))
     app.add_handler(CommandHandler("users", users_cmd))
+    app.add_handler(CommandHandler("keys", keys_cmd))
     app.add_handler(CommandHandler("deluser", deluser_cmd))
+    app.add_handler(CommandHandler("setgramads", setgramads_cmd))
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     print("Bot is polling live...")
