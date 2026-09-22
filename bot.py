@@ -18,7 +18,10 @@ ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# Dummy Web Server for Render (UptimeRobot ke liye)
+# पेन्डिंग सिम्बल रिक्वेस्ट्स (हर बार विज़िट करवाने के लिए)
+PENDING_REQUESTS = {}
+
+# Dummy Web Server for Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -58,26 +61,27 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- Force Subscription Check ---
 async def is_user_subscribed(bot, user_id: int) -> bool:
     if user_id == ADMIN_ID:
         return True
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            return True
-        return False
+        return member.status in ["member", "administrator", "creator"]
     except TelegramError as e:
         logging.error(f"Force Sub Error: {e}")
-        # अगर बॉट चैनल में एडमिन नहीं है तो एरर न आए
         return False
 
 def get_force_sub_markup():
-    keyboard = [
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Join Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🔄 Joined / Refresh", callback_data="check_joined")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [InlineKeyboardButton("🔄 Verify Joined", callback_data="check_joined")]
+    ])
+
+def get_channel_visit_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data="get_pending_level")]
+    ])
 
 def calculate_op_levels(df):
     dop = float(df['Open'].iloc[-1])
@@ -209,63 +213,96 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not subscribed:
         msg = (
-            "⚠️ <b>Access Denied!</b>\n\n"
-            "इस बॉट का उपयोग करने के लिए आपको हमारे मुख्य टेलीग्राम चैनल को जॉइन करना अनिवार्य है।\n\n"
-            "नीचे दिए गए बटन से चैनल जॉइन करें और फिर <b>Joined / Refresh</b> पर टैप करें।"
+            "⚠️ <b>चैनल जॉइन करना अनिवार्य है!</b>\n\n"
+            "बॉट का उपयोग करने के लिए नीचे दिए गए बटन से हमारे चैनल को जॉइन करें:"
         )
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
     msg = (
-        "👋 <b>Welcome to Universal OP Bot!</b>\n\n"
-        "यह बॉट चैनल मेंबर्स के लिए <b>100% फ्री</b> है।\n\n"
-        "📈 <b>सपोर्टेड सिम्बल्स:</b>\n"
-        "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>FINNIFTY</code>, <code>SENSEX</code>\n"
-        "• <code>GOLDMCX</code>, <code>SILVERMCX</code>, <code>CRUDEOIL</code>\n"
-        "• कोई भी स्टॉक (जैसे: <code>RELIANCE</code>, <code>TCS</code>)\n\n"
-        "👉 लेवल्स देखने के लिए सीधा सिम्बल नाम लिखकर भेजें।"
+        "👋 <b>Universal OP Bot में आपका स्वागत है!</b>\n\n"
+        "लेवल्स देखने के लिए सिम्बल का नाम भेजें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>)."
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
 
-async def check_joined_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    subscribed = await is_user_subscribed(context.bot, user_id)
-
-    if subscribed:
-        await query.message.delete()
-        await query.message.reply_text(
-            "✅ <b>वेरिफिकेशन सफल!</b>\n\nअब आप बॉट का उपयोग कर सकते हैं। लेवल्स पाने के लिए सिम्बल का नाम भेजें (उदा. NIFTY, GOLDMCX).",
-            parse_mode="HTML"
-        )
-    else:
-        await query.message.reply_text(
-            "❌ आपने अभी तक चैनल जॉइन नहीं किया है। कृपया पहले नीचे दिए चैनल को जॉइन करें:",
-            reply_markup=get_force_sub_markup()
-        )
-
-async def process_ticker(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
-    user_id = update.effective_user.id
-    subscribed = await is_user_subscribed(context.bot, user_id)
-    
-    if not subscribed:
-        msg = (
-            "🔒 <b>चैनल जॉइन करना ज़रूरी है!</b>\n\n"
-            "लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।"
-        )
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
-        return
-
-    await update.message.reply_text(f"⏳ Calculating OP levels for <b>{symbol.upper()}</b>...", parse_mode="HTML")
+async def send_calculated_level(chat_id: int, symbol: str, context: ContextTypes.DEFAULT_TYPE):
     df, matched_symbol = fetch_data(symbol)
     if df is None:
-        await update.message.reply_text("❌ Symbol not found. Please check spelling.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Symbol not found. Please check spelling.")
         return
 
     lvl = calculate_op_levels(df)
     ist = pytz.timezone('Asia/Kolkata')
+    today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
+    formatted_msg = format_color_display(matched_symbol, today_str, lvl)
+    
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
+    await context.bot.send_message(chat_id=chat_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "check_joined":
+        subscribed = await is_user_subscribed(context.bot, user_id)
+        if subscribed:
+            await query.message.delete()
+            await query.message.reply_text("✅ <b>वेरिफिकेशन सफल!</b> अब लेवल्स के लिए सिम्बल का नाम भेजें (जैसे NIFTY).", parse_mode="HTML")
+        else:
+            await query.message.reply_text("❌ आपने अभी तक चैनल जॉइन नहीं किया है। कृपया पहले जॉइन करें:", reply_markup=get_force_sub_markup())
+
+    elif query.data == "get_pending_level":
+        symbol = PENDING_REQUESTS.pop(user_id, None)
+        if not symbol:
+            await query.message.reply_text("⚠️ कोई पेंडिंग रिक्वेस्ट नहीं मिली। कृपया सिम्बल का नाम दोबारा टाइप करके भेजें।")
+            return
+        
+        await query.message.delete()
+        await context.bot.send_message(chat_id=user_id, text=f"⏳ Calculating OP levels for <b>{symbol.upper()}</b>...", parse_mode="HTML")
+        await send_calculated_level(user_id, symbol, context)
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    query = update.message.text.strip().upper()
+    if query.startswith("/"):
+        return
+
+    # 1. क्या यूजर चैनल का मेंबर है?
+    subscribed = await is_user_subscribed(context.bot, user_id)
+    if not subscribed:
+        await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
+        return
+
+    # 2. एडमिन के लिए डायरेक्ट, बाकी यूज़र्स के लिए हर बार चैनल विज़िट अनिवार्य
+    if user_id == ADMIN_ID:
+        await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query}</b>...", parse_mode="HTML")
+        await send_calculated_level(user_id, query, context)
+        return
+
+    # सिम्बल को सेव करें और चैनल पर विज़िट करने का बटन भेजें
+    PENDING_REQUESTS[user_id] = query
+    msg = (
+        f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
+        "लेवल्स तुरंत अनलॉक करने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_channel_visit_markup())
+
+def main():
+    threading.Thread(target=run_web_server, daemon=True).start()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
+    
+    print("Bot is polling live with Mandatory Visit Per Level...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+ytz.timezone('Asia/Kolkata')
     today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
     formatted_msg = format_color_display(matched_symbol, today_str, lvl)
     
