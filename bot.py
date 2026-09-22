@@ -261,7 +261,6 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
-# 100% Reliable Native Async Loop for 9:30 AM Auto-Posting
 async def auto_post_scheduler_loop(bot):
     ist = pytz.timezone('Asia/Kolkata')
     last_posted_day = None
@@ -271,7 +270,6 @@ async def auto_post_scheduler_loop(bot):
             now_ist = datetime.now(ist)
             today_date_str = now_ist.strftime('%Y-%m-%d')
             
-            # Subah 9:30 AM IST check (9:30 to 9:31 ke beech)
             if now_ist.hour == 9 and now_ist.minute == 30 and last_posted_day != today_date_str:
                 last_posted_day = today_date_str
                 is_weekend = now_ist.weekday() >= 5
@@ -494,4 +492,6 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
                 f"<pre>{box}</pre>\n"
                 f"👉 <b>निर्देश:</b> नीचे दिए गए बटन से चैनल पर जाएँ और स्पॉन्सर पोस्ट देखें।\n"
                 f"<i>Stay on the channel until countdown reaches 00s.</i>"
-                + SEBI_DISCLAIMER
+                + SEBI_DISCLAIMER_TEXT
+            )
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"👉 1. Open Channel & View Ad ({sec
