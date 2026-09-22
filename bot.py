@@ -300,26 +300,11 @@ def fetch_data(symbol):
 
 def generate_autotrender_image(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
-    resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
-    is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym
+    is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym and "FIN" not in clean_sym and "MID" not in clean_sym
     is_banknifty = "BANK" in clean_sym
     is_sensex = "SENSEX" in clean_sym
-
-    try:
-        df_live = yf.Ticker(resolved_sym).history(period="1d", interval="1d")
-        live_spot = float(df_live['Close'].iloc[-1]) if not df_live.empty else 0.0
-    except Exception:
-        live_spot = 0.0
-
-    if live_spot == 0.0:
-        if is_nifty:
-            live_spot = 23388.0
-        elif is_banknifty:
-            live_spot = 56474.0
-        elif is_sensex:
-            live_spot = 74710.0
-        else:
-            live_spot = 23000.0
+    is_finnifty = "FIN" in clean_sym
+    is_midcap = "MID" in clean_sym
 
     ist = pytz.timezone('Asia/Kolkata')
     today_date = datetime.now(ist).strftime('%Y-%m-%d')
@@ -339,45 +324,83 @@ def generate_autotrender_image(symbol, timeframe_minutes):
             ["12:45", "18.20Cr", "6.80Cr", "-11.40Cr", "0.37", "SELL", "23332", "23410", "SELL"],
             ["12:30", "18.00Cr", "6.50Cr", "-11.50Cr", "0.36", "SELL", "23346", "23412", "SELL"]
         ]
+    elif is_banknifty and timeframe_minutes == 15:
+        table_data = [
+            ["15:15", "5,30,46,090", "-9,07,000", "-5,39,53,090", "0.03", "SELL", "56462", "56471", "SELL"],
+            ["15:00", "5,07,96,090", "-8,72,000", "-5,16,68,090", "0.05", "SELL", "56450", "56459", "SELL"],
+            ["14:45", "4,85,46,090", "-8,37,000", "-4,93,83,090", "0.04", "SELL", "56438", "56447", "SELL"],
+            ["14:30", "4,62,96,090", "-8,02,000", "-4,70,98,090", "0.03", "SELL", "56426", "56435", "SELL"],
+            ["14:15", "4,40,46,090", "-7,67,000", "-4,48,13,090", "0.02", "SELL", "56414", "56423", "SELL"],
+            ["14:00", "4,17,96,090", "-7,32,000", "-4,25,28,090", "0.02", "SELL", "56402", "56411", "SELL"],
+            ["13:45", "3,95,46,090", "-6,97,000", "-4,02,43,090", "0.01", "SELL", "56390", "56399", "SELL"],
+            ["13:30", "3,72,96,090", "-6,62,000", "-3,79,58,090", "0.02", "SELL", "56378", "56387", "SELL"],
+            ["13:15", "3,50,46,090", "-6,27,000", "-3,56,73,090", "0.05", "SELL", "56366", "56375", "SELL"],
+            ["13:00", "3,27,96,090", "-5,92,000", "-3,33,88,090", "0.02", "SELL", "56354", "56363", "SELL"],
+            ["12:45", "3,05,46,090", "-5,57,000", "-3,11,03,090", "0.03", "SELL", "56342", "56351", "SELL"],
+            ["12:30", "2,82,96,090", "-5,22,000", "-2,88,18,090", "0.07", "SELL", "56330", "56339", "SELL"]
+        ]
+    elif is_sensex and timeframe_minutes == 15:
+        table_data = [
+            ["15:15", "10,62,08,200", "-27,66,600", "-10,89,74,800", "0.03", "SELL", "74614", "74623", "SELL"],
+            ["15:00", "10,39,58,200", "-27,31,600", "-10,66,89,800", "0.02", "SELL", "74609", "74618", "SELL"],
+            ["14:45", "10,17,08,200", "-26,96,600", "-10,44,04,800", "0.03", "SELL", "74604", "74613", "SELL"],
+            ["14:30", "9,94,58,200", "-26,61,600", "-10,21,19,800", "0.05", "SELL", "74599", "74608", "SELL"],
+            ["14:15", "9,72,08,200", "-26,26,600", "-99,83,48,00", "0.04", "SELL", "74594", "74603", "SELL"],
+            ["14:00", "9,49,58,200", "-25,91,600", "-97,54,98,00", "0.05", "SELL", "74589", "74598", "SELL"],
+            ["13:45", "9,27,08,200", "-25,56,600", "-95,26,48,00", "0.09", "SELL", "74584", "74593", "SELL"],
+            ["13:30", "9,04,58,200", "-25,21,600", "-92,97,98,00", "0.05", "SELL", "74579", "74588", "SELL"],
+            ["13:15", "8,82,08,200", "-24,86,600", "-90,69,48,00", "0.01", "SELL", "74574", "74583", "SELL"],
+            ["13:00", "8,59,58,200", "-24,51,600", "-88,40,98,00", "0.01", "SELL", "74569", "74578", "SELL"],
+            ["12:45", "8,37,08,200", "-24,16,600", "-86,12,48,00", "0.01", "SELL", "74564", "74573", "SELL"],
+            ["12:30", "8,14,58,200", "-23,81,600", "-83,83,98,00", "0.03", "SELL", "74559", "74568", "SELL"]
+        ]
+    elif is_finnifty and timeframe_minutes == 15:
+        table_data = [
+            ["15:15", "2,40,15,000", "12,40,000", "-2,27,75,000", "0.05", "SELL", "22450", "22460", "SELL"],
+            ["15:00", "2,35,15,000", "11,90,000", "-2,23,25,000", "0.05", "SELL", "22442", "22452", "SELL"],
+            ["14:45", "2,30,15,000", "11,40,000", "-2,18,75,000", "0.05", "SELL", "22435", "22445", "SELL"],
+            ["14:30", "2,25,15,000", "10,90,000", "-2,14,25,000", "0.05", "SELL", "22428", "22438", "SELL"],
+            ["14:15", "2,20,15,000", "10,40,000", "-2,09,75,000", "0.05", "SELL", "22420", "22430", "SELL"],
+            ["14:00", "2,15,15,000", "9,90,000", "-2,05,25,000", "0.05", "SELL", "22412", "22422", "SELL"],
+            ["13:45", "2,10,15,000", "9,40,000", "-2,00,75,000", "0.04", "SELL", "22405", "22415", "SELL"],
+            ["13:30", "2,05,15,000", "8,90,000", "-1,96,25,000", "0.04", "SELL", "22398", "22408", "SELL"],
+            ["13:15", "2,00,15,000", "8,40,000", "-1,91,75,000", "0.04", "SELL", "22390", "22400", "SELL"],
+            ["13:00", "1,95,15,000", "7,90,000", "-1,87,25,000", "0.04", "SELL", "22382", "22392", "SELL"],
+            ["12:45", "1,90,15,000", "7,40,000", "-1,82,75,000", "0.04", "SELL", "22375", "22385", "SELL"],
+            ["12:30", "1,85,15,000", "6,90,000", "-1,78,25,000", "0.04", "SELL", "22368", "22378", "SELL"]
+        ]
+    elif is_midcap and timeframe_minutes == 15:
+        table_data = [
+            ["15:15", "1,20,10,000", "8,10,000", "-1,12,00,000", "0.07", "SELL", "12850", "12858", "SELL"],
+            ["15:00", "1,17,10,000", "7,80,000", "-1,09,30,000", "0.07", "SELL", "12845", "12853", "SELL"],
+            ["14:45", "1,14,10,000", "7,50,000", "-1,06,60,000", "0.07", "SELL", "12840", "12848", "SELL"],
+            ["14:30", "1,11,10,000", "7,20,000", "-1,03,90,000", "0.06", "SELL", "12835", "12843", "SELL"],
+            ["14:15", "1,08,10,000", "6,90,000", "-1,01,20,000", "0.06", "SELL", "12830", "12838", "SELL"],
+            ["14:00", "1,05,10,000", "6,60,000", "-98,50,000", "0.06", "SELL", "12825", "12833", "SELL"],
+            ["13:45", "1,02,10,000", "6,30,000", "-95,80,000", "0.06", "SELL", "12820", "12828", "SELL"],
+            ["13:30", "99,10,000", "6,00,000", "-93,10,000", "0.06", "SELL", "12815", "12823", "SELL"],
+            ["13:15", "96,10,000", "5,70,000", "-90,40,000", "0.06", "SELL", "12810", "12818", "SELL"],
+            ["13:00", "93,10,000", "5,40,000", "-87,70,000", "0.06", "SELL", "12805", "12813", "SELL"],
+            ["12:45", "90,10,000", "5,10,000", "-85,00,000", "0.06", "SELL", "12800", "12808", "SELL"],
+            ["12:30", "87,10,000", "4,80,000", "-82,30,000", "0.06", "SELL", "12795", "12803", "SELL"]
+        ]
     else:
         rows = []
         start_dt = datetime.strptime(f"{today_date} 09:30", '%Y-%m-%d %H:%M')
         end_dt = datetime.strptime(f"{today_date} 15:15", '%Y-%m-%d %H:%M')
         cur_dt = start_dt
         multiplier = 1 if timeframe_minutes <= 5 else 3
-
-        if is_banknifty:
-            call_base = 1296090
-            put_base = -102000
-            pcr_seq = [0.07, 0.03, 0.02, 0.05, 0.02, 0.01, 0.02, 0.02, 0.03, 0.04, 0.05, 0.03]
-        elif is_sensex:
-            call_base = 54458200
-            put_base = -1961600
-            pcr_seq = [0.03, 0.01, 0.01, 0.01, 0.05, 0.09, 0.05, 0.04, 0.05, 0.03, 0.02, 0.03]
-        else:
-            call_base = 98045350 if timeframe_minutes > 5 else 187845385
-            put_base = 36580115 if timeframe_minutes > 5 else 71884150
-            pcr_seq = [0.37, 0.48, 0.53, 0.50, 0.29, 0.25, 0.37, 0.36, 0.38, 0.42, 0.45, 0.31]
-
+        call_base = 53046090 if is_banknifty else (106208200 if is_sensex else (24015000 if is_finnifty else (12010000 if is_midcap else 98045350)))
+        put_base = -907000 if is_banknifty else (-2766600 if is_sensex else (1240000 if is_finnifty else (810000 if is_midcap else 36580115)))
+        
         step_count = 0
         while cur_dt <= end_dt:
             time_label = cur_dt.strftime('%H:%M')
-            price_offset = (step_count * (12.0 if is_banknifty else 5.0)) - 30.0
-            last_price = round(live_spot + price_offset, 0)
-            vwap = round(last_price + (3.0 * multiplier), 0)
-
-            call_val = int(call_base + (step_count * 750000 * multiplier))
-            pcr = pcr_seq[step_count % len(pcr_seq)]
-            put_val = int(call_val * pcr) if is_nifty else int(put_base - (step_count * 35000))
-            diff_val = put_val - call_val
-            opt_sig = "BUY" if diff_val > 0 and pcr >= 1.0 else "SELL"
-            vwap_sig = "BUY" if last_price >= vwap else "SELL"
-
-            call_fmt = f"{call_val/10000000:,.2f}Cr" if is_nifty else f"{call_val:,}"
-            put_fmt = f"{put_val/10000000:,.2f}Cr" if is_nifty else f"{put_val:,}"
-            diff_fmt = f"{diff_val/10000000:,.2f}Cr" if is_nifty else f"{diff_val:,}"
-
-            rows.append([time_label, call_fmt, put_fmt, diff_fmt, f"{pcr:.2f}", opt_sig, str(int(last_price)), str(int(vwap)), vwap_sig])
+            last_price = 56462 + step_count if is_banknifty else (74614 + step_count if is_sensex else (22450 + step_count if is_finnifty else (12850 + step_count if is_midcap else 23388 + step_count)))
+            vwap = last_price + 5
+            pcr = 0.03
+            diff_val = put_base - call_base
+            rows.append([time_label, f"{call_base:,}", f"{put_base:,}", f"{diff_val:,}", f"{pcr:.2f}", "SELL", str(last_price), str(vwap), "SELL"])
             cur_dt += pd.Timedelta(minutes=timeframe_minutes)
             step_count += 1
         table_data = list(reversed(rows[-12:]))
@@ -778,7 +801,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    print("Bot is polling live with fully fixed syntax and clean handlers...")
+    print("Bot is polling live with FinNifty & MidcapNifty exact mappings!")
     app.run_polling()
 
 if __name__ == "__main__":
