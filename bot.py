@@ -1,6 +1,7 @@
 import os
 import threading
 import asyncio
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
@@ -8,19 +9,49 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 import pytz
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# आपका टोकन
+# टोकन और एडमिन आईडी (आपकी आईडी: 1612210913)
 TELEGRAM_BOT_TOKEN = "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# 30 सेकंड बाद 'Get Levels' अनलॉक होगा
+# 30 सेकंड का अनिवार्य विज़िट टाइमर
 MANDATORY_VISIT_SECONDS = 30
+
+# यूज़र्स का डेटाबेस (Broadcast और Stats के लिए)
+USERS_FILE = "bot_users.json"
+
+# अनिवार्य SEBI डिस्क्लेमर जो हर मैसेज के साथ रहेगा
+SEBI_DISCLAIMER_TEXT = (
+    "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+    "⚖️ <b>SEBI REGULATORY DISCLAIMER:</b>\n"
+    "<i>We are NOT SEBI Registered advisors/analysts. All levels & data provided are purely algorithmic calculations for EDUCATIONAL & PAPER TRADING purposes only. Options & Futures trading involves high risk. We are not responsible for any financial loss. Please consult your SEBI registered financial advisor before trading.</i>\n"
+    "🔒 <b>Official Channel:</b> @LIVEOPTIONDATA"
+)
+
+def load_users():
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+def save_user(user_id):
+    users = load_users()
+    if user_id not in users:
+        users.add(user_id)
+        try:
+            with open(USERS_FILE, "w") as f:
+                json.dump(list(users), f)
+        except Exception as e:
+            logging.error(f"Error saving user: {e}")
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -36,16 +67,23 @@ def run_web_server():
 
 ALIAS_MAP = {
     "NIFTY": "^NSEI",
+    "NIFTY 50": "^NSEI",
     "NIFTY50": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
+    "BANK NIFTY": "^NSEBANK",
     "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    "FIN NIFTY": "NIFTY_FIN_SERVICE.NS",
     "MIDCPNIFTY": "^NSEMDCP50",
+    "MIDCAP NIFTY": "^NSEMDCP50",
     "SENSEX": "^BSESN",
     "BANKEX": "^BSEBK",
     "MCX": "MCX.NS",
     "GOLD": "GC=F",
+    "MCX GOLD": "GC=F",
     "SILVER": "SI=F",
+    "MCX SILVER": "SI=F",
     "CRUDE": "CL=F",
+    "CRUDE OIL": "CL=F",
     "CRUDEOIL": "CL=F",
     "NATURALGAS": "NG=F",
     "COPPER": "HG=F",
@@ -69,6 +107,15 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
     except TelegramError as e:
         logging.error(f"Force Sub Error: {e}")
         return False
+
+def get_main_keyboard():
+    keyboard = [
+        [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANK NIFTY")],
+        [KeyboardButton("🪙 FIN NIFTY"), KeyboardButton("⚡ MIDCAP NIFTY")],
+        [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🛢️ CRUDE OIL")],
+        [KeyboardButton("📖 How to Use? (गाइड)"), KeyboardButton("📢 Official Channel")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_force_sub_markup():
     return InlineKeyboardMarkup([
@@ -105,6 +152,15 @@ def calculate_op_levels(df):
     bc = round((dhigh + dlow) / 2)
     tc = round((pivot - bc) + pivot)
 
+    cpr_width = abs(tc - bc)
+    cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
+    if cpr_percent < 0.25:
+        cpr_type = "⚡ Narrow CPR (Trending Move Expected)"
+    elif cpr_percent > 0.65:
+        cpr_type = "⚠️ Wide CPR (Rangebound / Sideways Expected)"
+    else:
+        cpr_type = "⚖️ Normal CPR (Moderate Trending Day)"
+
     targets = {}
     ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
     for idx, r in enumerate(ratios, 1):
@@ -113,6 +169,7 @@ def calculate_op_levels(df):
 
     return {
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
+        "cpr_type": cpr_type,
         "b_above": round(doKdc + (range1 * 0.236)),
         "b_conf": round(doKdc + (range1 * 0.382)),
         "s_below": round(doKdc - (range1 * 0.236)),
@@ -140,14 +197,15 @@ def get_mcx_parity(symbol_name):
 
 def fetch_data(symbol):
     sym_u = symbol.upper().strip()
-    if sym_u in ["GOLDMCX", "MCXGOLD"]:
+    if sym_u in ["GOLDMCX", "MCXGOLD", "MCX GOLD", "🥇 MCX GOLD"]:
         df = get_mcx_parity("GOLDMCX")
         return df, "MCX GOLD (10g / INR)"
-    elif sym_u in ["SILVERMCX", "MCXSILVER"]:
+    elif sym_u in ["SILVERMCX", "MCXSILVER", "MCX SILVER"]:
         df = get_mcx_parity("SILVERMCX")
         return df, "MCX SILVER (1kg / INR)"
 
-    resolved = ALIAS_MAP.get(sym_u, sym_u)
+    clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🛢️", "").strip()
+    resolved = ALIAS_MAP.get(clean_sym, clean_sym)
     candidates = [resolved]
     if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
         candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
@@ -166,40 +224,65 @@ def fetch_data(symbol):
 
 def format_color_display(matched_symbol, today_str, lvl):
     out = []
-    out.append(f"📊 <b>{matched_symbol} • OP LEVELS</b>")
-    out.append(f"📅 <code>{today_str}</code>\n")
+    out.append(f"📊 <b>{matched_symbol} • OP CALCULATIONS</b>")
+    out.append(f"📅 <code>{today_str}</code>")
+    out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
 
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
-    out.append("<code>------------------------------</code>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
     out.append(f"  P  (Central Pivot): <b>{lvl['pivot']}</b>")
     out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
-    out.append(f"  Expected Range    : <b>{lvl['range']}</b>\n")
+    out.append(f"  Expected Range    : <b>{lvl['range']} pts</b>\n")
 
-    out.append("🟢 <b>BUYING ZONE (BULLISH)</b>")
-    out.append("<code>------------------------------</code>")
+    out.append("🟢 <b>BUYING ZONE (BULLISH ENTRY)</b>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
-    out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b>")
+    out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b> <i>(Safe Entry)</i>")
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
     out.append("")
 
     out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND)</b>")
-    out.append("<code>------------------------------</code>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
-    out.append("  <i>(Strictly avoid new intraday positions here)</i>\n")
+    out.append("  <i>(Strictly avoid taking fresh intraday entries inside this zone)</i>\n")
 
-    out.append("🔴 <b>SELLING ZONE (BEARISH)</b>")
-    out.append("<code>------------------------------</code>")
+    out.append("🔴 <b>SELLING ZONE (BEARISH ENTRY)</b>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
-    out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b>")
+    out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>")
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
 
+    out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
+
+async def send_how_to_use(update: Update):
+    guide_text = (
+        "📖 <b>Universal OP Bot का उपयोग कैसे करें? / User Guide:</b>\n\n"
+        "<b>1️⃣ स्टेप 1 (सिम्बल चुनें):</b>\n"
+        "नीचे दिए गए कीबोर्ड से इंडेक्स चुनें (उदा. NIFTY 50) या किसी भी शेयर का नाम लिखें।\n\n"
+        "<b>2️⃣ स्टेप 2 (चैनल पर जाएँ):</b>\n"
+        "<b>'👉 1. Visit Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ और लेटेस्ट स्पॉन्सर पोस्ट देखें।\n\n"
+        "<b>3️⃣ स्टेप 3 (30 सेकंड लाइव काउंटडाउन):</b>\n"
+        "चैनल पर कम से कम 30 सेकंड रुकें। बॉट में लाइव काउंटडाउन चलेगा:\n"
+        "• ⏳ <code>Ad Verification in progress... [30s]</code>\n"
+        "• ⌛ <code>Please stay on channel & view post... [15s]</code>\n"
+        "• 💚 <code>Verified! Unlocking levels now... [0s]</code>\n\n"
+        "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
+        "30 सेकंड पूरे होते ही <b>'✅ 2. Get Levels (Unblocked 🎉)'</b> बटन प्रकट होगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
+        + SEBI_DISCLAIMER_TEXT
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
+    if update.message:
+        await update.message.reply_text(guide_text, parse_mode="HTML", reply_markup=markup)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(guide_text, parse_mode="HTML", reply_markup=markup)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    save_user(user_id)
     subscribed = await is_user_subscribed(context.bot, user_id)
     
     if not subscribed:
@@ -207,22 +290,83 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ <b>चैनल जॉइन करना अनिवार्य है! / Channel Subscription Required!</b>\n\n"
             "बॉट का उपयोग करने के लिए कृपया हमारे चैनल को जॉइन करें।\n"
             "<i>Please join our official channel to use this bot.</i>"
+            + SEBI_DISCLAIMER_TEXT
         )
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
     msg = (
         "👋 <b>Universal OP Bot में आपका स्वागत है! / Welcome!</b>\n\n"
-        "लेवल्स देखने के लिए किसी भी सिम्बल का नाम भेजें:\n"
-        "<i>Send any market symbol to get calculations:</i>\n\n"
-        "👉 उदा. / e.g. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>FINNIFTY</code>, <code>GOLDMCX</code>, <code>CRUDEOIL</code>, <code>RELIANCE</code>"
+        "लेवल्स देखने के लिए नीचे दिए गए कीबोर्ड से सिम्बल चुनें या नाम टाइप करके भेजें:\n"
+        "<i>Select any symbol from the quick menu below:</i>"
+        + SEBI_DISCLAIMER_TEXT
     )
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_keyboard())
+
+# एडमिन स्टैट्स कमांड (/stats)
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    users = load_users()
+    await update.message.reply_text(
+        f"📊 <b>Bot Admin Analytics:</b>\n\n"
+        f"👥 कुल एक्टिव यूज़र्स (Total Users): <b>{len(users)}</b>\n"
+        f"📢 ऑफिशियल चैनल: @LIVEOPTIONDATA", 
+        parse_mode="HTML"
+    )
+
+# एडमिन ब्रॉडकास्ट कमांड (/broadcast <संदेश>)
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ <b>उपयोग का तरीका (Usage):</b>\n"
+            "<code>/broadcast आपका प्रचार संदेश यहाँ लिखें</code>\n\n"
+            "उदाहरण:\n"
+            "<code>/broadcast 📢 आज का जैकपॉट ऑप्शन ट्रेड हमारे चैनल @LIVEOPTIONDATA पर दिया गया है! अभी चेक करें।</code>", 
+            parse_mode="HTML"
+        )
+        return
+
+    text_to_broadcast = " ".join(context.args)
+    # ब्रॉडकास्ट के नीचे भी SEBI डिस्क्लेमर जुड़ेगा
+    final_broadcast_msg = text_to_broadcast + SEBI_DISCLAIMER_TEXT
+
+    users = load_users()
+    sent_count = 0
+    failed_count = 0
+
+    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट भेजा जा रहा है... (कुल {len(users)} यूज़र्स को)")
+
+    channel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
+
+    for uid in users:
+        try:
+            await context.bot.send_message(
+                chat_id=uid, 
+                text=final_broadcast_msg, 
+                parse_mode="HTML",
+                reply_markup=channel_markup
+            )
+            sent_count += 1
+            await asyncio.sleep(0.05)  # Telegram API limit safety
+        except Exception:
+            failed_count += 1
+            continue
+
+    await status_msg.edit_text(
+        f"✅ <b>ब्रॉडकास्ट सफलतापूर्वक पूरा हुआ!</b>\n\n"
+        f"✔️ सफलतापूर्वक भेजा गया: <b>{sent_count}</b> यूज़र्स को\n"
+        f"❌ असफल (Blocked/Deleted): <b>{failed_count}</b>\n"
+        f"👥 कुल डेटाबेस: <b>{len(users)}</b>", 
+        parse_mode="HTML"
+    )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+    save_user(user_id)
     data = query.data
 
     if data == "check_joined":
@@ -232,14 +376,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.delete()
             await query.message.reply_text(
                 "✅ <b>वेरिफिकेशन सफल! / Verification Successful!</b>\n\n"
-                "अब लेवल्स पाने के लिए सिम्बल भेजें (उदा. NIFTY).\n"
-                "<i>Now send any symbol name (e.g. NIFTY, BANKNIFTY).</i>", 
-                parse_mode="HTML"
+                "अब नीचे दिए गए कीबोर्ड से सिम्बल चुनें।" + SEBI_DISCLAIMER_TEXT, 
+                parse_mode="HTML",
+                reply_markup=get_main_keyboard()
             )
         else:
             await query.message.reply_text(
                 "❌ <b>आपने अभी तक चैनल जॉइन नहीं किया है!</b>\n"
-                "<i>You haven't joined the channel yet! Please join first:</i>", 
+                "<i>You haven't joined the channel yet! Please join first:</i>" + SEBI_DISCLAIMER_TEXT, 
                 reply_markup=get_force_sub_markup(),
                 parse_mode="HTML"
             )
@@ -249,8 +393,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         subscribed = await is_user_subscribed(context.bot, user_id)
         if not subscribed:
-            await query.answer("⚠️ कृपया पहले चैनल जॉइन करें! / Please join channel first!", show_alert=True)
-            await query.message.reply_text("🔒 बॉट का उपयोग करने के लिए चैनल जॉइन करें:\n<i>Join channel to continue:</i>", reply_markup=get_force_sub_markup(), parse_mode="HTML")
+            await query.answer("⚠️ कृपया पहले चैनल जॉइन करें!", show_alert=True)
+            await query.message.reply_text("🔒 बॉट का उपयोग करने के लिए चैनल जॉइन करें:" + SEBI_DISCLAIMER_TEXT, reply_markup=get_force_sub_markup(), parse_mode="HTML")
             return
 
         await query.answer()
@@ -267,8 +411,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if df is None:
                 await status_msg.edit_text(
                     f"❌ <b>'{symbol}'</b> का डेटा नहीं मिला / Data Not Found.\n\n"
-                    "कृपया सही सिम्बल लिखें / Please enter valid symbol:\n"
-                    "(उदा. / e.g. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>, <code>RELIANCE</code>).",
+                    "कृपया सही सिम्बल चुनें या नाम लिखें।" + SEBI_DISCLAIMER_TEXT,
                     parse_mode="HTML"
                 )
                 return
@@ -283,28 +426,62 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
         except Exception as e:
             logging.error(f"Error delivering level: {e}")
-            await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। / Error calculating levels.")
+            await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। / Error calculating levels." + SEBI_DISCLAIMER_TEXT)
 
-async def delayed_unlock(bot, chat_id, message_id, query_symbol):
-    """30 सेकंड बाद 'Get Levels' का बटन अनलॉक करता है"""
-    await asyncio.sleep(MANDATORY_VISIT_SECONDS)
+async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
+    """3-स्टेप विज़ुअल काउंटडाउन: 30s ➔ 15s ➔ 0s"""
+    steps = [
+        (15, "⌛", "Please stay on channel & view sponsor post...", "15s remaining", "चैनल पर बने रहें, स्पॉन्सर पोस्ट वेरिफिकेशन जारी है..."),
+        (15, "💚", "Verified! Unlocking levels now...", "0s", "सत्यापन सफल हुआ! लेवल्स अनलॉक किए जा रहे हैं...")
+    ]
     
-    unlocked_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ 2. Get Levels (अनलॉक हो गया 🎉)", callback_data=f"lvl_{query_symbol}")]
+    channel_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
     ])
+
+    for sleep_time, icon, status_head, time_rem, subtext in steps:
+        await asyncio.sleep(sleep_time)
+        full_text = (
+            f"📊 <b>{query_symbol} के लेवल्स तैयार हो रहे हैं!</b>\n\n"
+            f"1. ऊपर दिए बटन से चैनल पर जाएँ और प्रायोजित विज्ञापन देखें।\n\n"
+            f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+            f"{icon} <b>Status:</b> {status_head}\n"
+            f"⏱️ <b>Time:</b> <code>[{time_rem}]</code>\n"
+            f"<i>{subtext}</i>\n"
+            f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>"
+            + SEBI_DISCLAIMER_TEXT
+        )
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=full_text,
+                parse_mode="HTML",
+                reply_markup=channel_markup
+            )
+        except Exception:
+            pass
+
+    # 30 सेकंड बाद 'Get Levels' बटन अनलॉक
+    unlocked_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Official Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ 2. Get Levels (Unblocked 🎉)", callback_data=f"lvl_{query_symbol}")]
+    ])
+    
+    final_text = (
+        f"🎉 <b>{query_symbol} • VERIFICATION COMPLETE!</b>\n\n"
+        "💚 <b>Ad Verification: 100% Passed</b>\n"
+        "आपका 30 सेकंड का विज़िट समय पूरा हो चुका है।\n\n"
+        "👇 नीचे दिए गए बटन पर टैप करके तुरंत लेवल्स देखें:\n"
+        "<i>Click below to view full OP calculation:</i>"
+        + SEBI_DISCLAIMER_TEXT
+    )
     
     try:
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
-            text=(
-                f"🎉 <b>{query_symbol} लेवल्स अनलॉक हो चुके हैं! / Levels Unlocked!</b>\n\n"
-                f"आपका 30 सेकंड का विज़िट समय पूरा हो चुका है।\n"
-                f"<i>Your 30-second visit is complete.</i>\n\n"
-                "👇 नीचे दिए गए बटन पर टैप करके तुरंत लेवल्स देखें:\n"
-                "<i>Click below to view levels:</i>"
-            ),
+            text=final_text,
             parse_mode="HTML",
             reply_markup=unlocked_markup
         )
@@ -313,46 +490,65 @@ async def delayed_unlock(bot, chat_id, message_id, query_symbol):
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    query = update.message.text.strip().upper()
-    if query.startswith("/"):
+    save_user(user_id)
+    raw_text = update.message.text.strip()
+
+    if raw_text.startswith("/"):
         return
+
+    # गाइड बटन
+    if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
+        await send_how_to_use(update)
+        return
+
+    # ऑफिशियल चैनल बटन
+    if "OFFICIAL CHANNEL" in raw_text.upper():
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
+        await update.message.reply_text("📢 हमारे ऑफिशियल चैनल से जुड़ें जहाँ डेली मार्केट अपडेट्स और लाइव ऑप्शन डेटा मिलता है:" + SEBI_DISCLAIMER_TEXT, reply_markup=markup, parse_mode="HTML")
+        return
+
+    clean_symbol = raw_text.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🛢️", "").strip().upper()
 
     subscribed = await is_user_subscribed(context.bot, user_id)
     if not subscribed:
         await update.message.reply_text(
             "🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।\n"
-            "<i>Please join our channel to access levels.</i>", 
+            "<i>Please join our channel to access levels.</i>" + SEBI_DISCLAIMER_TEXT, 
             parse_mode="HTML", 
             reply_markup=get_force_sub_markup()
         )
         return
 
-    # शुरुआत में केवल चैनल देखने का 1 बटन होगा
     initial_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
     ])
 
     sent_msg = await update.message.reply_text(
-        f"📊 <b>{query} के लेवल्स तैयार हैं! / Levels are ready!</b>\n\n"
-        f"1. ऊपर दिए बटन से चैनल खोलें और विज्ञापन/लेटेस्ट पोस्ट देखें।\n"
-        f"<i>1. Open the channel from above button & view latest post/ad.</i>\n\n"
-        f"⏳ दूसरा बटन <b>(Get Levels)</b> ठीक <b>{MANDATORY_VISIT_SECONDS} सेकंड</b> बाद यहीं अपने आप प्रकट होगा।\n"
-        f"<i>The unlock button will appear here automatically after {MANDATORY_VISIT_SECONDS} seconds.</i>",
+        f"📊 <b>{clean_symbol} के लेवल्स तैयार हैं!</b>\n\n"
+        f"1. ऊपर दिए बटन से चैनल खोलें और प्रायोजित विज्ञापन देखें।\n\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        f"⏳ <b>Status:</b> Ad Verification in progress...\n"
+        f"⏱️ <b>Time:</b> <code>[30s remaining]</code>\n"
+        f"<i>Please stay on channel & view post...</i>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>"
+        + SEBI_DISCLAIMER_TEXT,
         parse_mode="HTML",
         reply_markup=initial_markup
     )
 
-    asyncio.create_task(delayed_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, query))
+    asyncio.create_task(live_countdown_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, clean_symbol))
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live purely with Bilingual instructions...")
+    print("Bot is polling live with SEBI Disclaimer & Admin Broadcast...")
     app.run_polling()
 
 if __name__ == "__main__":
