@@ -140,55 +140,69 @@ def fetch_data(symbol):
             continue
     return None, None
 
-def build_table(lvl):
-    w1, w2 = 16, 12
-    lines = [
-        f"┌{'─'*w1}┬{'─'*w2}┐",
-        f"│ {'LEVEL TYPE':<{w1-2}} │ {'PRICE':<{w2-2}} │",
-        f"├{'─'*w1}┼{'─'*w2}┤",
-        f"│ CPR Top (TC)   │ {lvl['tc']:<{w2-2}} │",
-        f"│ Pivot (P)      │ {lvl['pivot']:<{w2-2}} │",
-        f"│ CPR Bot (BC)   │ {lvl['bc']:<{w2-2}} │",
-        f"│ Range          │ {lvl['range']:<{w2-2}} │",
-        f"├{'─'*w1}┼{'─'*w2}┤",
-        f"│ BUY ABOVE      │ {lvl['b_above']:<{w2-2}} │",
-        f"│ Buy Confirm    │ {lvl['b_conf']:<{w2-2}} │"
-    ]
+def format_color_display(matched_symbol, today_str, lvl):
+    out = []
+    out.append(f"📊 <b>{matched_symbol} • OP LEVELS</b>")
+    out.append(f"📅 <code>{today_str}</code>\n")
+
+    # Central Pivot Range Block
+    out.append("🔵 <b>CPR / PIVOT RANGE</b>")
+    out.append("<code>" + "-"*30 + "</code>")
+    out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
+    out.append(f"  P  (Central Pivot): <b>{lvl['pivot']}</b>")
+    out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
+    out.append(f"  Expected Range    : <b>{lvl['range']}</b>\n")
+
+    # Buying Zone (Green)
+    out.append("🟢 <b>BUYING ZONE (BULLISH)</b>")
+    out.append("<code>" + "-"*30 + "</code>")
+    out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
+    out.append(f"  Buy Confirm       : <b>{lvl['b_conf']}</b>")
     for i in range(1, 11):
-        lines.append(f"│ Target {i:<7} │ {lvl[f'bt{i}']:<{w2-2}} │")
-    lines.append(f"├{'─'*w1}┼{'─'*w2}┤")
-    lines.append(f"│ SELL BELOW     │ {lvl['s_below']:<{w2-2}} │")
-    lines.append(f"│ Sell Confirm   │ {lvl['s_conf']:<{w2-2}} │")
+        out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
+    out.append("")
+
+    # Orange Zone - No Trade Zone
+    out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND / CHOPPY)</b>")
+    out.append("<code>" + "-"*30 + "</code>")
+    out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
+    out.append("  <i>(Strictly avoid new intraday positions here)</i>\n")
+
+    # Selling Zone (Red)
+    out.append("🔴 <b>SELLING ZONE (BEARISH)</b>")
+    out.append("<code>" + "-"*30 + "</code>")
+    out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
+    out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b>")
     for i in range(1, 11):
-        lines.append(f"│ Target {i:<7} │ {lvl[f'st{i}']:<{w2-2}} │")
-    lines.append(f"└{'─'*w1}┴{'─'*w2}┘")
-    return "\n".join(lines)
+        out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
+
+    return "\n".join(out)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "Universal Daily OP Calculator Bot\n\n"
-        "Direct commands:\n"
-        "• <code>GOLDMCX</code> (Gold 10g in INR)\n"
-        "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
+        "Commands:\n"
+        "• <code>GOLDMCX</code> (Gold per 10g ₹)\n"
+        "• <code>SILVERMCX</code> (Silver per 1kg ₹)\n"
         "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
         "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def process_ticker(update: Update, query: str):
-    await update.message.reply_text(f"Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
+    await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
     df, matched_symbol = fetch_data(query)
 
     if df is None:
-        await update.message.reply_text(f"Symbol <code>{query}</code> ka data fetch nahi ho paya.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Symbol <code>{query}</code> fetch nahi ho paya.", parse_mode="HTML")
         return
 
     lvl = calculate_op_levels(df)
     ist = pytz.timezone('Asia/Kolkata')
     today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
-    table = build_table(lvl)
-    msg = f"<b>{matched_symbol} • OP LEVELS</b>\n<code>{today_str}</code>\n<pre>{table}</pre>"
-    await update.message.reply_text(msg, parse_mode="HTML")
+    
+    formatted_msg = format_color_display(matched_symbol, today_str, lvl)
+    await update.message.reply_text(formatted_msg, parse_mode="HTML")
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
