@@ -17,8 +17,6 @@ ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-PENDING_REQUESTS = {}
-
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -39,6 +37,7 @@ ALIAS_MAP = {
     "MIDCPNIFTY": "^NSEMDCP50",
     "SENSEX": "^BSESN",
     "BANKEX": "^BSEBK",
+    "MCX": "MCX.NS",
     "GOLD": "GC=F",
     "SILVER": "SI=F",
     "CRUDE": "CL=F",
@@ -72,12 +71,6 @@ def get_force_sub_markup():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Join Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
         [InlineKeyboardButton("🔄 Verify Joined", callback_data="check_joined")]
-    ])
-
-def get_channel_visit_markup():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data="get_pending_level")]
     ])
 
 def calculate_op_levels(df):
@@ -143,7 +136,7 @@ def get_mcx_parity(symbol_name):
     return res
 
 def fetch_data(symbol):
-    sym_u = symbol.upper()
+    sym_u = symbol.upper().strip()
     if sym_u in ["GOLDMCX", "MCXGOLD"]:
         df = get_mcx_parity("GOLDMCX")
         return df, "MCX GOLD (10g / INR)"
@@ -216,15 +209,28 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         "👋 <b>Universal OP Bot में आपका स्वागत है!</b>\n\n"
-        "लेवल्स देखने के लिए सिम्बल का नाम भेजें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>)."
+        "लेवल्स देखने के लिए सिम्बल का नाम भेजें (उदा. <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>GOLDMCX</code>, <code>RELIANCE</code>)."
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
 
-async def send_calculated_level(chat_id: int, symbol: str, context: ContextTypes.DEFAULT_TYPE):
+async def deliver_levels(chat_id: int, symbol: str, context: ContextTypes.DEFAULT_TYPE):
+    progress_msg = await context.bot.send_message(
+        chat_id=chat_id, 
+        text=f"⏳ Calculating OP levels for <b>{symbol.upper()}</b>...", 
+        parse_mode="HTML"
+    )
+    
     df, matched_symbol = fetch_data(symbol)
     if df is None:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Symbol not found. Please check spelling.")
+        await progress_msg.edit_text(
+            f"❌ <b>'{symbol.upper()}'</b> का डेटा नहीं मिला।\n\n"
+            "कृपया सही सिम्बल लिखें, जैसे:\n"
+            "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>FINNIFTY</code>\n"
+            "• <code>GOLDMCX</code>, <code>SILVERMCX</code>, <code>CRUDEOIL</code>\n"
+            "• <code>RELIANCE</code>, <code>TCS</code>, <code>SBIN</code>",
+            parse_mode="HTML"
+        )
         return
 
     lvl = calculate_op_levels(df)
@@ -233,30 +239,27 @@ async def send_calculated_level(chat_id: int, symbol: str, context: ContextTypes
     formatted_msg = format_color_display(matched_symbol, today_str, lvl)
     
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
+    await progress_msg.delete()
     await context.bot.send_message(chat_id=chat_id, text=formatted_msg, parse_mode="HTML", reply_markup=markup)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
+    data = query.data
 
-    if query.data == "check_joined":
+    if data == "check_joined":
         subscribed = await is_user_subscribed(context.bot, user_id)
         if subscribed:
             await query.message.delete()
-            await query.message.reply_text("✅ <b>वेरिफिकेशन सफल!</b> अब लेवल्स के लिए सिम्बल का नाम भेजें (जैसे NIFTY).", parse_mode="HTML")
+            await query.message.reply_text("✅ <b>वेरिफिकेशन सफल!</b> अब लेवल्स के लिए सिम्बल भेजें (उदा. NIFTY, BANKNIFTY).", parse_mode="HTML")
         else:
             await query.message.reply_text("❌ आपने अभी तक चैनल जॉइन नहीं किया है। कृपया पहले जॉइन करें:", reply_markup=get_force_sub_markup())
 
-    elif query.data == "get_pending_level":
-        symbol = PENDING_REQUESTS.pop(user_id, None)
-        if not symbol:
-            await query.message.reply_text("⚠️ कोई पेंडिंग रिक्वेस्ट नहीं मिली। कृपया सिम्बल का नाम दोबारा टाइप करके भेजें।")
-            return
-        
+    elif data.startswith("lvl_"):
+        symbol = data.replace("lvl_", "").strip()
         await query.message.delete()
-        await context.bot.send_message(chat_id=user_id, text=f"⏳ Calculating OP levels for <b>{symbol.upper()}</b>...", parse_mode="HTML")
-        await send_calculated_level(user_id, symbol, context)
+        await deliver_levels(user_id, symbol, context)
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -269,17 +272,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    if user_id == ADMIN_ID:
-        await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query}</b>...", parse_mode="HTML")
-        await send_calculated_level(user_id, query, context)
-        return
+    # सिम्बल को सीधे बटन के callback_data में डाल दिया
+    visit_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data=f"lvl_{query}")]
+    ])
 
-    PENDING_REQUESTS[user_id] = query
     msg = (
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        "लेवल्स तुरंत पाने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
+        "लेवल्स तुरंत अनलॉक करने के लिए नीचे दिए गए बटन से चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को देखें, फिर <b>✅ I Checked Channel / Get Levels</b> पर टैप करें।"
     )
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_channel_visit_markup())
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=visit_markup)
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
@@ -289,9 +292,8 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with Mandatory Visit Per Level...")
+    print("Bot is polling live...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-    
