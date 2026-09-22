@@ -12,16 +12,16 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-# आपका नया और ऐक्टिव टोकन
 TELEGRAM_BOT_TOKEN = "8983062859:AAH0l6D3kqC1rVllTYX7tQLFBDOqd8po_lI"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# चैनल पर रुकने का अनिवार्य समय (सेकंड में)
-MANDATORY_VISIT_SECONDS = 6
+# चैनल पर रुकने का अनिवार्य समय (7 सेकंड)
+MANDATORY_VISIT_SECONDS = 7
 
+# यूज़र का टाइमर तभी चालू होगा जब वह चैनल विज़िट बटन दबाएगा
 USER_VISIT_TIMESTAMPS = {}
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -65,8 +65,6 @@ logging.basicConfig(
 )
 
 async def is_user_subscribed(bot, user_id: int) -> bool:
-    if user_id == ADMIN_ID:
-        return True
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
@@ -235,6 +233,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text("❌ आपने अभी तक चैनल जॉइन नहीं किया है। कृपया पहले जॉइन करें:", reply_markup=get_force_sub_markup())
 
+    elif data.startswith("goto_"):
+        symbol = data.replace("goto_", "").strip()
+        
+        # यूज़र ने चैनल जाने का बटन दबाया — अब टाइमर चालू होता है
+        USER_VISIT_TIMESTAMPS[user_id] = time.time()
+        await query.answer()
+
+        step2_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ I Checked Channel (Get Levels)", callback_data=f"lvl_{symbol}")]
+        ])
+
+        await query.message.edit_text(
+            f"🚀 <b>स्टेप 2: चैनल पोस्ट और विज्ञापन देखें!</b>\n\n"
+            f"1. नीचे <b>Open Channel</b> बटन दबाकर चैनल खोलें और विज्ञापन देखें।\n"
+            f"2. कम से कम {MANDATORY_VISIT_SECONDS} सेकंड रुकें।\n"
+            f"3. उसके बाद <b>✅ I Checked Channel (Get Levels)</b> पर टैप करें।",
+            parse_mode="HTML",
+            reply_markup=step2_markup
+        )
+
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
 
@@ -245,17 +264,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("🔒 बॉट का उपयोग जारी रखने के लिए चैनल जॉइन करें:", reply_markup=get_force_sub_markup())
             return
 
-        # 2. चैनल विज़िट टाइमर चेक (कम से कम 6 सेकंड)
-        request_time = USER_VISIT_TIMESTAMPS.get(user_id, 0)
+        # 2. क्या उसने पहले चैनल ओपन किया?
+        if user_id not in USER_VISIT_TIMESTAMPS:
+            await query.answer("⚠️ कृपया पहले चैनल विज़िट करें!", show_alert=True)
+            return
+
+        # 3. सख्त टाइमर जांच (7 सेकंड अनिवार्य)
+        request_time = USER_VISIT_TIMESTAMPS[user_id]
         elapsed = time.time() - request_time
 
-        if elapsed < MANDATORY_VISIT_SECONDS and user_id != ADMIN_ID:
-            remaining = int(MANDATORY_VISIT_SECONDS - elapsed)
+        if elapsed < MANDATORY_VISIT_SECONDS:
+            remaining = int(round(MANDATORY_VISIT_SECONDS - elapsed))
+            if remaining <= 0:
+                remaining = 1
             await query.answer(
-                f"⚠️ आपने चैनल की पोस्ट नहीं देखी!\nकृपया चैनल पर जाकर {remaining} सेकंड पोस्ट/Ad देखें, फिर बटन दबाएं।", 
+                f"⏳ रुकिए!\n\nआपने चैनल पर पर्याप्त समय नहीं बिताया।\nकृपया कम से कम {remaining} सेकंड और रुककर विज्ञापन देखें।", 
                 show_alert=True
             )
             return
+
+        # टाइमर पूरा होने पर रिकॉर्ड रीसेट
+        USER_VISIT_TIMESTAMPS.pop(user_id, None)
 
         await query.answer()
         await query.message.delete()
@@ -299,18 +328,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    USER_VISIT_TIMESTAMPS[user_id] = time.time()
-
-    visit_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 View Latest Post & Ad on Channel", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ I Checked Channel / Get Levels", callback_data=f"lvl_{query}")]
+    # शुरुआत में 'I Checked' का बटन छुपा रहेगा! सिर्फ चैनल जाने का बटन दिखेगा।
+    step1_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👉 1. Visit Channel & View Latest Ad", callback_data=f"goto_{query}")]
     ])
 
     msg = (
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
-        "लेवल्स अनलॉक करने के लिए चैनल की <b>लेटेस्ट पोस्ट (Ad)</b> को कम से कम 5 सेकंड तक देखें, फिर नीचे दिए बटन पर टैप करें।"
+        "लेवल्स अनलॉक करने के लिए नीचे दिए गए बटन पर टैप करें और चैनल की <b>लेटेस्ट पोस्ट/विज्ञापन</b> को देखें:"
     )
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=visit_markup)
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=step1_markup)
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
@@ -320,7 +347,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with active token...")
+    print("Bot is polling live with strict 2-step verification...")
     app.run_polling()
 
 if __name__ == "__main__":
