@@ -12,13 +12,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-TELEGRAM_BOT_TOKEN = "8983062859:AAH0l6D3kqC1rVllTYX7tQLFBDOqd8po_lI"
+# आपका नया फ्रेश टोकन
+TELEGRAM_BOT_TOKEN = "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
-# दूसरा बटन ठीक 30 सेकंड बाद ही स्क्रीन पर आएगा
+# दूसरा बटन ठीक 30 सेकंड बाद स्क्रीन पर आएगा
 MANDATORY_VISIT_SECONDS = 30
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -271,10 +272,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("❌ लेवल्स निकालने में समस्या आई। कृपया पुनः प्रयास करें।")
 
 async def delayed_unlock(bot, chat_id, message_id, query_symbol):
-    """30 सेकंड तक बैकग्राउंड में इंतज़ार करेगा, उसके बाद ही 'Get Levels' बटन मैसेज में जोड़ेगा"""
+    """30 सेकंड बाद 'Get Levels' का बटन अनलॉक करता है"""
     await asyncio.sleep(MANDATORY_VISIT_SECONDS)
     
-    # 30 सेकंड बाद दूसरा बटन तैयार होगा
     unlocked_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)],
         [InlineKeyboardButton("✅ 2. Get Levels (अनलॉक हो गया)", callback_data=f"lvl_{query_symbol}")]
@@ -286,7 +286,7 @@ async def delayed_unlock(bot, chat_id, message_id, query_symbol):
             message_id=message_id,
             text=(
                 f"🎉 <b>{query_symbol} के लेवल्स अनलॉक हो चुके हैं!</b>\n\n"
-                "30 सेकंड का विज़िट समय पूरा हो गया है।\n"
+                "30 सेकंड का समय पूरा हो गया है।\n"
                 "लेवल्स देखने के लिए नीचे दिए गए बटन पर टैप करें:"
             ),
             parse_mode="HTML",
@@ -306,7 +306,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 लेवल्स देखने के लिए पहले हमारे चैनल <b>@LIVEOPTIONDATA</b> को जॉइन करें।", parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
-    # शुरुआत में केवल चैनल देखने का 1 बटन होगा (दूसरा बटन होगा ही नहीं!)
+    # शुरुआत में केवल चैनल देखने का 1 बटन होगा (दूसरा बटन स्क्रीन पर नहीं होगा)
     initial_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 1. Visit Channel & View Ad (चैनल खोलें)", url=CHANNEL_LINK)]
     ])
@@ -314,12 +314,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_msg = await update.message.reply_text(
         f"📊 <b>{query} के लेवल्स तैयार हैं!</b>\n\n"
         f"1. ऊपर दिए बटन से चैनल पर जाएँ और विज्ञापन/पोस्ट देखें।\n"
-        f"⏳ दूसरा बटन <b>(Get Levels)</b> ठीक <b>{MANDATORY_VISIT_SECONDS} सेकंड</b> बाद यहीं अपने आप अनलॉक होकर आएगा।",
+        f"⏳ दूसरा बटन <b>(Get Levels)</b> ठीक <b>{MANDATORY_VISIT_SECONDS} सेकंड</b> बाद यहीं अपने आप प्रकट होगा।",
         parse_mode="HTML",
         reply_markup=initial_markup
     )
 
-    # 30 सेकंड का टाइमर शुरू, इसके पूरा होने पर ही दूसरा बटन स्क्रीन पर आएगा
     asyncio.create_task(delayed_unlock(context.bot, sent_msg.chat_id, sent_msg.message_id, query))
 
 def main():
@@ -330,9 +329,8 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with delayed unlock...")
+    print("Bot is polling live purely with @LIVEOPTIONDATA channel flow...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-    
