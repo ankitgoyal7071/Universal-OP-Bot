@@ -1,18 +1,66 @@
 import os
+import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
 
-# Dummy Web Server to satisfy Render Web Service port check
+# Aapka Fixed Telegram Admin ID
+ADMIN_ID = 1612210913
+
+DB_FILE = "users_db.json"
+
+def load_users():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_users(data):
+    try:
+        with open(DB_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        logging.error(f"Error saving DB: {e}")
+
+def check_user_access(user_id):
+    if user_id == ADMIN_ID:
+        return True, "Admin (Lifetime Access)"
+    
+    users = load_users()
+    uid_str = str(user_id)
+    if uid_str not in users:
+        return False, None
+    
+    expiry_str = users[uid_str].get("expiry")
+    if not expiry_str:
+        return False, None
+    
+    try:
+        expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False, None
+
+    now = datetime.now()
+    if now > expiry_date:
+        return False, None
+    
+    diff = expiry_date - now
+    days_left = diff.days
+    hours_left = int(diff.seconds / 3600)
+    return True, f"{days_left}d {hours_left}h remaining (Till: {expiry_str})"
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -145,7 +193,6 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(f"📊 <b>{matched_symbol} • OP LEVELS</b>")
     out.append(f"📅 <code>{today_str}</code>\n")
 
-    # Central Pivot Range Block
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
     out.append("<code>" + "-"*30 + "</code>")
     out.append(f"  TC (Top Pivot)    : <b>{lvl['tc']}</b>")
@@ -153,7 +200,6 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(f"  BC (Bottom Pivot) : <b>{lvl['bc']}</b>")
     out.append(f"  Expected Range    : <b>{lvl['range']}</b>\n")
 
-    # Buying Zone (Green)
     out.append("🟢 <b>BUYING ZONE (BULLISH)</b>")
     out.append("<code>" + "-"*30 + "</code>")
     out.append(f"  Buy Above         : <b>{lvl['b_above']}</b>")
@@ -162,13 +208,11 @@ def format_color_display(matched_symbol, today_str, lvl):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'bt{i}']}</b>")
     out.append("")
 
-    # Orange Zone - No Trade Zone
     out.append("🟠 <b>NO TRADE ZONE (RANGEBOUND / CHOPPY)</b>")
     out.append("<code>" + "-"*30 + "</code>")
     out.append(f"  Zone Range        : <b>{lvl['s_conf']}  ⇄  {lvl['b_conf']}</b>")
     out.append("  <i>(Strictly avoid new intraday positions here)</i>\n")
 
-    # Selling Zone (Red)
     out.append("🔴 <b>SELLING ZONE (BEARISH)</b>")
     out.append("<code>" + "-"*30 + "</code>")
     out.append(f"  Sell Below        : <b>{lvl['s_below']}</b>")
@@ -178,18 +222,116 @@ def format_color_display(matched_symbol, today_str, lvl):
 
     return "\n".join(out)
 
+# --- Admin Commands ---
+
+async def add_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text("Format: <code>/add &lt;user_id&gt; &lt;days&gt;</code>\nExample: <code>/add 987654321 30</code>", parse_mode="HTML")
+        return
+    
+    target_uid = context.args[0].strip()
+    try:
+        days = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Days ek valid number hona chahiye (jaise: 1, 7, 15, 30, 120, 180, 365).")
+        return
+    
+    users = load_users()
+    expiry = datetime.now() + timedelta(days=days)
+    users[target_uid] = {
+        "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S"),
+        "days_given": days,
+        "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_users(users)
+    await update.message.reply_text(
+        f"✅ <b>Access Approved!</b>\n"
+        f"👤 User ID: <code>{target_uid}</code>\n"
+        f"⏳ Validity: <b>{days} Din</b>\n"
+        f"📅 Expiry Date: <code>{expiry.strftime('%Y-%m-%d %I:%M %p')}</code>",
+        parse_mode="HTML"
+    )
+
+async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Format: <code>/remove &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+    
+    target_uid = context.args[0].strip()
+    users = load_users()
+    if target_uid in users:
+        del users[target_uid]
+        save_users(users)
+        await update.message.reply_text(f"❌ User <code>{target_uid}</code> ka access revoke (block) kar diya gaya hai.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("Yeh User ID database me nahi mila.")
+
+async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    users = load_users()
+    if not users:
+        await update.message.reply_text("Filhal koi active subscriber nahi hai.")
+        return
+    
+    msg = ["📋 <b>Active Subscribers:</b>\n"]
+    for uid, data in users.items():
+        msg.append(f"• ID: <code>{uid}</code> | Expiry: <code>{data.get('expiry')}</code> ({data.get('days_given')}D)")
+    await update.message.reply_text("\n".join(msg), parse_mode="HTML")
+
+async def myplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    has_access, info = check_user_access(uid)
+    if has_access:
+        await update.message.reply_text(f"✅ <b>Subscription Status:</b> Active\n⏳ Validity: <code>{info}</code>", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ <b>Subscription Inactive</b>\nAapka User ID: <code>{uid}</code>\nAccess ke liye Admin se contact karein.", parse_mode="HTML")
+
+# --- User Handlers ---
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    has_access, info = check_user_access(uid)
+
+    if not has_access:
+        msg = (
+            "🔒 <b>Private Universal OP Calculator Bot</b>\n\n"
+            "Aapka subscription active nahi hai.\n\n"
+            f"🆔 <b>Aapka Telegram ID:</b> <code>{uid}</code>\n\n"
+            "Access activate karwane ke liye apna User ID Admin ko send karein."
+        )
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
     msg = (
-        "Universal Daily OP Calculator Bot\n\n"
-        "Commands:\n"
-        "• <code>GOLDMCX</code> (Gold per 10g ₹)\n"
-        "• <code>SILVERMCX</code> (Silver per 1kg ₹)\n"
+        "👋 <b>Universal Daily OP Calculator Bot</b>\n\n"
+        f"✅ <b>Status:</b> Active (<code>{info}</code>)\n\n"
+        "Supported commands:\n"
+        "• <code>GOLDMCX</code> (Gold 10g in INR)\n"
+        "• <code>SILVERMCX</code> (Silver 1kg in INR)\n"
         "• <code>NIFTY</code>, <code>BANKNIFTY</code>, <code>SENSEX</code>\n"
-        "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>"
+        "• <code>RELIANCE</code>, <code>TCS</code>, <code>CRUDE</code>\n\n"
+        "Apni expiry check karne ke liye: /myplan"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def process_ticker(update: Update, query: str):
+    uid = update.effective_user.id
+    has_access, info = check_user_access(uid)
+    if not has_access:
+        await update.message.reply_text(
+            f"🔒 <b>Access Denied:</b> Subscription active nahi hai.\n🆔 Aapka ID: <code>{uid}</code>",
+            parse_mode="HTML"
+        )
+        return
+
     await update.message.reply_text(f"⏳ Calculating OP levels for <b>{query.upper()}</b>...", parse_mode="HTML")
     df, matched_symbol = fetch_data(query)
 
@@ -212,7 +354,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("myplan", myplan_cmd))
+    app.add_handler(CommandHandler("add", add_user_cmd))
+    app.add_handler(CommandHandler("remove", remove_user_cmd))
+    app.add_handler(CommandHandler("users", list_users_cmd))
+    
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     print("Bot is polling live...")
     app.run_polling()
