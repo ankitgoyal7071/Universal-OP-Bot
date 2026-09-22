@@ -81,7 +81,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Universal Pro Bot is running healthy!")
+        self.wfile.write(b"Universal Pro Bot Suite running healthy!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -148,12 +148,9 @@ def get_force_sub_markup():
     ])
 
 def calculate_strikes_2percent(spot_price, symbol):
-    # Step size selection based on index
     sym_u = symbol.upper()
     if "BANK" in sym_u or "SENSEX" in sym_u:
         step = 100
-    elif "FIN" in sym_u or "NIFTY" in sym_u or "MID" in sym_u:
-        step = 50
     else:
         step = 50
 
@@ -172,6 +169,21 @@ def calculate_strikes_2percent(spot_price, symbol):
         "put_1": int(put_strike_1),
         "put_2": int(put_strike_2)
     }
+
+def get_market_mood():
+    try:
+        vix_df = yf.Ticker("^INDIAVIX").history(period="5d", interval="1d")
+        if not vix_df.empty:
+            vix_val = round(float(vix_df['Close'].iloc[-1]), 2)
+            if vix_val < 13:
+                return f"{vix_val} (Low Volatility / Sideways Decay Zone ⚠️)"
+            elif vix_val <= 18:
+                return f"{vix_val} (Ideal Balanced Volatility / Good Swings 🟢)"
+            else:
+                return f"{vix_val} (High Volatility / Fast Momentum Breakouts ⚡)"
+    except Exception:
+        pass
+    return "14.20 (Balanced Swing Mode 🟢)"
 
 def calculate_op_levels(df, symbol):
     current_price = round(float(df['Close'].iloc[-1]), 2)
@@ -206,9 +218,9 @@ def calculate_op_levels(df, symbol):
     cpr_width = abs(tc - bc)
     cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
     if cpr_percent < 0.25:
-        cpr_type = "⚡ Narrow CPR (Trending Move Expected)"
+        cpr_type = "⚡ Narrow CPR (Trending Day Expected - Ideal for Buying)"
     elif cpr_percent > 0.65:
-        cpr_type = "⚠️ Wide CPR (Rangebound / Sideways Expected)"
+        cpr_type = "⚠️ Wide CPR (Rangebound Day - Avoid Fresh Option Buying)"
     else:
         cpr_type = "⚖️ Normal CPR (Moderate Trending Day)"
 
@@ -219,11 +231,13 @@ def calculate_op_levels(df, symbol):
         targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
     strikes = calculate_strikes_2percent(current_price, symbol)
+    mood = get_market_mood()
 
     return {
         "current_price": current_price,
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
         "cpr_type": cpr_type,
+        "market_mood": mood,
         "b_above": round(doKdc + (range1 * 0.236)),
         "b_conf": round(doKdc + (range1 * 0.382)),
         "s_below": round(doKdc - (range1 * 0.236)),
@@ -283,9 +297,9 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(f"📊 <b>{matched_symbol} • PRO OP ALGO</b>")
     out.append(f"📅 <code>{today_str}</code>")
     out.append(f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>")
+    out.append(f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>")
     out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
 
-    # 2% Strike Selection Segment
     out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
     out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
     out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
@@ -317,15 +331,24 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(f"  Sell Confirm      : <b>{lvl['s_conf']}</b> <i>(Safe Entry)</i>")
     for i in range(1, 11):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
+    out.append("")
+
+    out.append("🛡️ <b>ANTI-FAKEOUT CONFIRMATION CHECKLIST:</b>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
+    out.append("  1️⃣ Entry tabhi lein jab 15-min candle Confirm level ke upar/niche close kare.")
+    out.append("  2️⃣ Trigger candle ka High/Low break hone par hi position add karein.")
+    out.append("  3️⃣ No Trade Zone me strict no-trading discipline follow karein.")
 
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
-# Automated Background Loop: Pre-Open Pulse (9:08 AM) & Levels (9:30 AM)
+# Automated Background Loop: Pre-Open (9:08 AM), Levels (9:30 AM), Closing Report (3:45 PM) To Channel
+# Note: Target Hit alerts have been completely disabled from posting to channel.
 async def auto_post_scheduler_loop(bot):
     ist = pytz.timezone('Asia/Kolkata')
     last_levels_day = None
     last_preopen_day = None
+    last_closing_day = None
 
     while True:
         try:
@@ -335,7 +358,7 @@ async def auto_post_scheduler_loop(bot):
             is_weekend = now_ist.weekday() >= 5
             is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
 
-            # 1. Pre-Open Pulse at 9:08 AM IST
+            # 1. Pre-Open Pulse at 9:08 AM IST to Channel
             if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
                 last_preopen_day = today_date_str
                 if not is_nse_holiday:
@@ -343,14 +366,14 @@ async def auto_post_scheduler_loop(bot):
                         "🌅 <b>PRE-OPEN MARKET PULSE (9:08 AM IST)</b>\n"
                         f"📅 <code>{today_str}</code>\n"
                         "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-                        "⚡ <b>Session Opening Status:</b> Pre-Open Settled\n"
-                        "📈 Intraday algorithmic OP levels will unlock at <b>9:30 AM IST</b>.\n"
+                        "⚡ <b>Session Status:</b> Pre-Open Settled\n"
+                        "📈 Intraday algorithmic OP levels will release at <b>9:30 AM IST</b>.\n"
                         "🔔 Keep @LIVEOPTIONDATA notifications active!"
                         + SEBI_DISCLAIMER_TEXT
                     )
                     await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
 
-            # 2. Daily OP Levels at 9:30 AM IST
+            # 2. Daily OP Levels at 9:30 AM IST to Channel
             if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
                 last_levels_day = today_date_str
                 symbols_to_post = []
@@ -372,6 +395,20 @@ async def auto_post_scheduler_loop(bot):
                     except Exception as e:
                         logging.error(f"Error auto-posting {sym}: {e}")
 
+            # 3. 3:45 PM Daily Closing Performance Summary to Channel
+            if now_ist.hour == 15 and now_ist.minute == 45 and last_closing_day != today_date_str:
+                last_closing_day = today_date_str
+                if not is_nse_holiday:
+                    closing_report = (
+                        "📯 <b>DAILY MARKET CLOSING SUMMARY (3:45 PM)</b>\n"
+                        f"📅 <code>{today_str}</code>\n"
+                        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+                        "📊 <b>Execution Mode:</b> Strictly Rule-based Algorithmic CPR\n"
+                        "💡 <i>Tomorrow's pre-open pulse will post at 9:08 AM and fresh OP levels at 9:30 AM IST!</i>"
+                        + SEBI_DISCLAIMER_TEXT
+                    )
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=closing_report, parse_mode="HTML")
+
             await asyncio.sleep(30)
         except Exception as e:
             logging.error(f"Error in scheduler loop: {e}")
@@ -380,13 +417,15 @@ async def auto_post_scheduler_loop(bot):
 async def send_how_to_use(update: Update):
     guide_text = (
         "📖 <b>Universal OP Bot ka उपयोग कैसे करें? / User Guide:</b>\n\n"
-        "<b>1️⃣ स्टेप 1 (सिम्बल चुनें):</b>\n"
-        "नीचे दिए गए कीबोर्ड से इंडेक्स चुनें या किसी भी शेयर का नाम लिखें।\n\n"
-        "<b>2️⃣ स्टेप 2 (2% स्ट्राइक सेलेक्टर):</b>\n"
+        "<b>1️⃣ सिम्बल चुनें:</b>\n"
+        "नीचे कीबोर्ड से इंडेक्स चुनें (उदा. NIFTY 50) या किसी भी शेयर का नाम लिखें।\n\n"
+        "<b>2️⃣ 2% स्ट्राइक सेलेक्टर:</b>\n"
         "बॉट स्पॉट प्राइस का ±2% कैलकुलेट करके सबसे सुरक्षित CE और PE स्ट्राइक अपने आप बताएगा।\n\n"
-        "<b>3️⃣ स्टेप 3 (VIP फास्ट पास):</b>\n"
-        "अपने 3 दोस्तों को बॉट रेफर करें और 30s टाइमर हमेशा के लिए स्किप करें! (`👥 VIP Referral Link` दबाएँ)।\n\n"
-        "<b>4️⃣ स्टेप 4 (रिस्क कैलकुलेटर):</b>\n"
+        "<b>3️⃣ मार्केट मूड मीटर:</b>\n"
+        "India VIX और CPR चौड़ाई से बॉट बताएगा कि आज ऑप्शन बाय करना चाहिए या मार्केट साइडवेज़ रहेगा।\n\n"
+        "<b>4️⃣ VIP फास्ट पास:</b>\n"
+        "अपने 3 दोस्तों को बॉट रेफर करें और 30s टाइमर हमेशा के लिए बंद करें! (`👥 VIP Referral Link` दबाएँ)।\n\n"
+        "<b>5️⃣ रिस्क कैलकुलेटर:</b>\n"
         "लॉट साइज कैलकुलेट करने के लिए `🧮 Lot Size Calculator` बटन दबाएँ।\n"
         + SEBI_DISCLAIMER_TEXT
     )
@@ -400,7 +439,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(user_id)
 
-    # Referral detection (e.g., /start ref_123456)
     if context.args and context.args[0].startswith("ref_"):
         try:
             referrer_id = int(context.args[0].replace("ref_", ""))
@@ -465,7 +503,6 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         risk_pct = float(context.args[1])
         risk_amt = round(cap * (risk_pct / 100.0), 2)
 
-        # Standard sl reference: Nifty 20 pts sl, Bank Nifty 40 pts sl
         nifty_lot_size = 25
         nifty_risk_per_lot = 20 * nifty_lot_size
         nifty_lots = max(1, int(risk_amt / nifty_risk_per_lot))
@@ -522,7 +559,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text=final_broadcast_msg, parse_mode="HTML", reply_markup=channel_markup)
             sent_count += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.04)
         except Exception:
             failed_count += 1
             continue
@@ -650,7 +687,13 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
     ])
     
     try:
-        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode="HTML", reply_markup=unlocked_markup)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=final_text,
+            parse_mode="HTML",
+            reply_markup=unlocked_markup
+        )
     except Exception as e:
         logging.error(f"Error updating message after delay: {e}")
 
@@ -690,7 +733,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check for VIP status: VIP bypasses 30s timer directly
+    # VIP User Direct Delivery
     if is_vip_user(user_id):
         status_msg = await update.message.reply_text(f"⚡ <b>VIP Instant Access:</b> {clean_symbol} के लेवल्स लोड हो रहे हैं...", parse_mode="HTML")
         df, matched_symbol = fetch_data(clean_symbol)
@@ -704,7 +747,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=markup)
             return
 
-    # Normal user gets the 30s visit timer
+    # Normal User Verification Timer
     start_box = make_big_timer_box(30)
     initial_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 1. Open Channel & View Ad (30s)", url=CHANNEL_LINK)]
@@ -737,7 +780,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live with Pro Suite (Strikes, Pre-Open, VIP Referral, Calc)...")
+    print("Bot is polling live clean with Target-Hit removed from channel...")
     app.run_polling()
 
 if __name__ == "__main__":
