@@ -13,7 +13,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-TELEGRAM_BOT_TOKEN = "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc"
+# टोकन सीधे कोड और Environment Variable दोनों से सपोर्ट करेगा
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8983062859:AAGVLsG6R1wuZ2qLJu-Q5f150Ul8HRqAgMc")
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
@@ -260,11 +261,11 @@ async def send_how_to_use(update: Update):
         "<b>1️⃣ स्टेप 1 (सिम्बल चुनें):</b>\n"
         "नीचे दिए गए कीबोर्ड से इंडेक्स चुनें (उदा. NIFTY 50) या किसी भी शेयर का नाम लिखें।\n\n"
         "<b>2️⃣ स्टेप 2 (चैनल पर जाएँ):</b>\n"
-        "<b>'👉 1. Visit Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ और लेटेस्ट स्पॉन्सर पोस्ट देखें।\n\n"
+        "<b>'👉 1. Open Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ और लेटेस्ट स्पॉन्सर पोस्ट देखें।\n\n"
         "<b>3️⃣ स्टेप 3 (30 सेकंड लाइव काउंटडाउन):</b>\n"
-        "बटन और स्क्रीन दोनों पर लाइव हाईलाइटेड काउंटडाउन बॉक्स दिखेगा (30s ➔ 15s ➔ 0s)।\n\n"
+        "बटन और स्क्रीन दोनों पर लाइव हाईलाइटेड डिजिटल काउंटडाउन बॉक्स दिखेगा (30s ➔ 20s ➔ 10s ➔ 0s)।\n\n"
         "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
-        "30 सेकंड पूरे होते ही <b>'✅ 2. Get Levels (Unblocked 🎉)'</b> बटन प्रकट होगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
+        "30 सेकंड पूरे होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन प्रकट होगा। उस पर क्लिक करके तुरंत लेवल्स देखें!\n"
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -315,7 +316,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ <b>उपयोग का तरीका (Usage):</b>\n"
             "<code>/broadcast आपका प्रचार संदेश यहाँ लिखें</code>\n\n"
             "उदाहरण:\n"
-            "<code>/broadcast 📢 आज का जैकपॉट ऑप्शन ट्रेड हमारे चैनल @LIVEOPTIONDATA पर दिया गया है! अभी चेक करें।</code>", 
+            "<code>/broadcast 📢 आज का जैकपॉट ऑप्शन ट्रेड चैनल पर दिया गया है!</code>", 
             parse_mode="HTML"
         )
         return
@@ -449,7 +450,6 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
             except Exception:
                 pass
 
-    # 30 सेकंड बाद 'Get Levels' बटन अनलॉक
     unlocked_box = (
         f"┌──────────────────────────────┐\n"
         f"│   ✅ VERIFICATION COMPLETE   │\n"
@@ -510,7 +510,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # शुरुआत का हाईलाइटेड बॉक्स
     start_box = (
         f"┌──────────────────────────────┐\n"
         f"│   ⏳ AD VERIFICATION TAB    │\n"
