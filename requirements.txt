@@ -1,6 +1,7 @@
-python-telegram-bot>=20.0
-yfinance>=0.2.30
-pandas>=2.0.0
-numpy>=1.24.0
-requests>=2.31.0
-pytz>=2023.3
+python-telegram-bot
+pandas
+numpy
+yfinance
+requests
+matplotlib
+pytz
