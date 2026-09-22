@@ -21,6 +21,7 @@ CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
 MANDATORY_VISIT_SECONDS = 30
 USERS_FILE = "bot_users.json"
+REFERRALS_FILE = "bot_referrals.json"
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -33,35 +34,54 @@ NSE_HOLIDAYS = {
 SEBI_DISCLAIMER_TEXT = (
     "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
     "⚖️ <b>SEBI REGULATORY DISCLAIMER:</b>\n"
-    "<i>We are NOT SEBI Registered advisors/analysts. All levels & data provided are purely algorithmic calculations for EDUCATIONAL & PAPER TRADING purposes only. Options & Futures trading involves high risk. We are not responsible for any financial loss. Please consult your SEBI registered financial advisor before trading.</i>\n"
+    "<i>We are NOT SEBI Registered advisors/analysts. All levels, strikes & calculations are purely algorithmic formulas for EDUCATIONAL & PAPER TRADING purposes only. Trading involves high market risk. Consult your SEBI registered financial advisor before trading.</i>\n"
     "🔒 <b>Official Channel:</b> @LIVEOPTIONDATA"
 )
 
-def load_users():
-    if os.path.exists(USERS_FILE):
+def load_data(file_path, default_val):
+    if os.path.exists(file_path):
         try:
-            with open(USERS_FILE, "r") as f:
-                return set(json.load(f))
+            with open(file_path, "r") as f:
+                return json.load(f)
         except Exception:
-            return set()
-    return set()
+            return default_val
+    return default_val
+
+def save_data(file_path, data):
+    try:
+        with open(file_path, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logging.error(f"Error saving {file_path}: {e}")
 
 def save_user(user_id):
-    users = load_users()
+    users = set(load_data(USERS_FILE, []))
     if user_id not in users:
         users.add(user_id)
-        try:
-            with open(USERS_FILE, "w") as f:
-                json.dump(list(users), f)
-        except Exception as e:
-            logging.error(f"Error saving user: {e}")
+        save_data(USERS_FILE, list(users))
+
+def record_referral(referrer_id, new_user_id):
+    refs = load_data(REFERRALS_FILE, {})
+    ref_key = str(referrer_id)
+    if ref_key not in refs:
+        refs[ref_key] = []
+    if new_user_id not in refs[ref_key] and new_user_id != referrer_id:
+        refs[ref_key].append(new_user_id)
+        save_data(REFERRALS_FILE, refs)
+
+def is_vip_user(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    refs = load_data(REFERRALS_FILE, {})
+    user_invites = refs.get(str(user_id), [])
+    return len(user_invites) >= 3
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Bot is alive and healthy!")
+        self.wfile.write(b"Universal Pro Bot is running healthy!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -114,8 +134,9 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANK NIFTY")],
-        [KeyboardButton("🪙 FIN NIFTY"), KeyboardButton("⚡ MIDCAP NIFTY")],
+        [KeyboardButton("🪙 FIN NIFTY"), KeyboardButton("⚡ SENSEX")],
         [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🛢️ CRUDE OIL")],
+        [KeyboardButton("🧮 Lot Size Calculator"), KeyboardButton("👥 VIP Referral Link")],
         [KeyboardButton("📖 How to Use? (गाइड)"), KeyboardButton("📢 Official Channel")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -126,7 +147,33 @@ def get_force_sub_markup():
         [InlineKeyboardButton("🔄 Verify Joined / वेरिफाई करें", callback_data="check_joined")]
     ])
 
-def calculate_op_levels(df):
+def calculate_strikes_2percent(spot_price, symbol):
+    # Step size selection based on index
+    sym_u = symbol.upper()
+    if "BANK" in sym_u or "SENSEX" in sym_u:
+        step = 100
+    elif "FIN" in sym_u or "NIFTY" in sym_u or "MID" in sym_u:
+        step = 50
+    else:
+        step = 50
+
+    call_raw = spot_price - (spot_price * 0.02)
+    put_raw = spot_price + (spot_price * 0.02)
+
+    call_strike_1 = round(call_raw / step) * step
+    call_strike_2 = call_strike_1 + step
+
+    put_strike_1 = round(put_raw / step) * step
+    put_strike_2 = put_strike_1 - step
+
+    return {
+        "call_1": int(call_strike_1),
+        "call_2": int(call_strike_2),
+        "put_1": int(put_strike_1),
+        "put_2": int(put_strike_2)
+    }
+
+def calculate_op_levels(df, symbol):
     current_price = round(float(df['Close'].iloc[-1]), 2)
     dop = float(df['Open'].iloc[-1])
     dc = float(df['Close'].iloc[-2])
@@ -171,6 +218,8 @@ def calculate_op_levels(df):
         targets[f"bt{idx}"] = round(doKdc + (range1 * r))
         targets[f"st{idx}"] = round(doKdc - (range1 * r))
 
+    strikes = calculate_strikes_2percent(current_price, symbol)
+
     return {
         "current_price": current_price,
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
@@ -179,6 +228,7 @@ def calculate_op_levels(df):
         "b_conf": round(doKdc + (range1 * 0.382)),
         "s_below": round(doKdc - (range1 * 0.236)),
         "s_conf": round(doKdc - (range1 * 0.382)),
+        "strikes": strikes,
         **targets
     }
 
@@ -228,11 +278,18 @@ def fetch_data(symbol):
     return None, None
 
 def format_color_display(matched_symbol, today_str, lvl):
+    st = lvl['strikes']
     out = []
-    out.append(f"📊 <b>{matched_symbol} • OP CALCULATIONS</b>")
+    out.append(f"📊 <b>{matched_symbol} • PRO OP ALGO</b>")
     out.append(f"📅 <code>{today_str}</code>")
-    out.append(f"💰 <b>Current Price (LTP):</b> <code>{lvl['current_price']}</code>")
+    out.append(f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>")
     out.append(f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n")
+
+    # 2% Strike Selection Segment
+    out.append("🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>")
+    out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
+    out.append(f"  🟢 <b>CALL FOCUS (CE):</b>  <code>{st['call_1']} CE</code>  |  <code>{st['call_2']} CE</code>")
+    out.append(f"  🔴 <b>PUT FOCUS (PE):</b>   <code>{st['put_1']} PE</code>  |  <code>{st['put_2']} PE</code>\n")
 
     out.append("🔵 <b>CPR / PIVOT RANGE</b>")
     out.append("<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>")
@@ -264,21 +321,38 @@ def format_color_display(matched_symbol, today_str, lvl):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
+# Automated Background Loop: Pre-Open Pulse (9:08 AM) & Levels (9:30 AM)
 async def auto_post_scheduler_loop(bot):
     ist = pytz.timezone('Asia/Kolkata')
-    last_posted_day = None
+    last_levels_day = None
+    last_preopen_day = None
 
     while True:
         try:
             now_ist = datetime.now(ist)
             today_date_str = now_ist.strftime('%Y-%m-%d')
-            
-            if now_ist.hour == 9 and now_ist.minute == 30 and last_posted_day != today_date_str:
-                last_posted_day = today_date_str
-                is_weekend = now_ist.weekday() >= 5
-                is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
-                today_str = now_ist.strftime('%Y-%m-%d %I:%M %p IST')
+            today_str = now_ist.strftime('%Y-%m-%d %I:%M %p IST')
+            is_weekend = now_ist.weekday() >= 5
+            is_nse_holiday = (today_date_str in NSE_HOLIDAYS) or is_weekend
 
+            # 1. Pre-Open Pulse at 9:08 AM IST
+            if now_ist.hour == 9 and now_ist.minute == 8 and last_preopen_day != today_date_str:
+                last_preopen_day = today_date_str
+                if not is_nse_holiday:
+                    pulse_msg = (
+                        "🌅 <b>PRE-OPEN MARKET PULSE (9:08 AM IST)</b>\n"
+                        f"📅 <code>{today_str}</code>\n"
+                        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+                        "⚡ <b>Session Opening Status:</b> Pre-Open Settled\n"
+                        "📈 Intraday algorithmic OP levels will unlock at <b>9:30 AM IST</b>.\n"
+                        "🔔 Keep @LIVEOPTIONDATA notifications active!"
+                        + SEBI_DISCLAIMER_TEXT
+                    )
+                    await bot.send_message(chat_id=CHANNEL_USERNAME, text=pulse_msg, parse_mode="HTML")
+
+            # 2. Daily OP Levels at 9:30 AM IST
+            if now_ist.hour == 9 and now_ist.minute == 30 and last_levels_day != today_date_str:
+                last_levels_day = today_date_str
                 symbols_to_post = []
                 if not is_nse_holiday:
                     symbols_to_post.extend(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
@@ -288,16 +362,12 @@ async def auto_post_scheduler_loop(bot):
                     try:
                         df, matched_symbol = fetch_data(sym)
                         if df is not None:
-                            lvl = calculate_op_levels(df)
+                            lvl = calculate_op_levels(df, sym)
                             msg_content = (
                                 f"🔔 <b>MORNING INTRADAY AUTO-LEVELS (9:30 AM)</b>\n\n"
                                 + format_color_display(matched_symbol, today_str, lvl)
                             )
-                            await bot.send_message(
-                                chat_id=CHANNEL_USERNAME,
-                                text=msg_content,
-                                parse_mode="HTML"
-                            )
+                            await bot.send_message(chat_id=CHANNEL_USERNAME, text=msg_content, parse_mode="HTML")
                             await asyncio.sleep(2)
                     except Exception as e:
                         logging.error(f"Error auto-posting {sym}: {e}")
@@ -312,12 +382,12 @@ async def send_how_to_use(update: Update):
         "📖 <b>Universal OP Bot ka उपयोग कैसे करें? / User Guide:</b>\n\n"
         "<b>1️⃣ स्टेप 1 (सिम्बल चुनें):</b>\n"
         "नीचे दिए गए कीबोर्ड से इंडेक्स चुनें या किसी भी शेयर का नाम लिखें।\n\n"
-        "<b>2️⃣ स्टेप 2 (चैनल पर जाएँ):</b>\n"
-        "<b>'👉 1. Open Channel & View Ad'</b> बटन दबाकर चैनल <b>@LIVEOPTIONDATA</b> पर जाएँ।\n\n"
-        "<b>3️⃣ स्टेप 3 (लाइव बिग काउंटडाउन):</b>\n"
-        "स्क्रीन पर बड़ा डिजिटल टाइमर बॉक्स चलेगा (30s से 0s तक)।\n\n"
-        "<b>4️⃣ स्टेप 4 (लेवल्स अनलॉक):</b>\n"
-        "समय पूरा होते ही <b>'🚀 2. GET LEVELS NOW (Unlocked 🎉)'</b> बटन आएगा। उस पर क्लिक करके तुरंत लेवल्स और Current Price देखें!\n"
+        "<b>2️⃣ स्टेप 2 (2% स्ट्राइक सेलेक्टर):</b>\n"
+        "बॉट स्पॉट प्राइस का ±2% कैलकुलेट करके सबसे सुरक्षित CE और PE स्ट्राइक अपने आप बताएगा।\n\n"
+        "<b>3️⃣ स्टेप 3 (VIP फास्ट पास):</b>\n"
+        "अपने 3 दोस्तों को बॉट रेफर करें और 30s टाइमर हमेशा के लिए स्किप करें! (`👥 VIP Referral Link` दबाएँ)।\n\n"
+        "<b>4️⃣ स्टेप 4 (रिस्क कैलकुलेटर):</b>\n"
+        "लॉट साइज कैलकुलेट करने के लिए `🧮 Lot Size Calculator` बटन दबाएँ।\n"
         + SEBI_DISCLAIMER_TEXT
     )
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Visit Official Channel", url=CHANNEL_LINK)]])
@@ -329,8 +399,16 @@ async def send_how_to_use(update: Update):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(user_id)
+
+    # Referral detection (e.g., /start ref_123456)
+    if context.args and context.args[0].startswith("ref_"):
+        try:
+            referrer_id = int(context.args[0].replace("ref_", ""))
+            record_referral(referrer_id, user_id)
+        except Exception:
+            pass
+
     subscribed = await is_user_subscribed(context.bot, user_id)
-    
     if not subscribed:
         msg = (
             "⚠️ <b>चैनल जॉइन करना अनिवार्य है! / Channel Subscription Required!</b>\n\n"
@@ -340,20 +418,86 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_force_sub_markup())
         return
 
+    vip_badge = "👑 <b>VIP Status: ACTIVE (Instant Access)</b>\n" if is_vip_user(user_id) else ""
     msg = (
-        "👋 <b>Universal OP Bot में आपका स्वागत है! / Welcome!</b>\n\n"
+        f"👋 <b>Universal OP Bot Pro में आपका स्वागत है!</b>\n\n"
+        f"{vip_badge}"
         "लेवल्स देखने के लिए नीचे दिए गए कीबोर्ड से सिम्बल चुनें या नाम टाइप करके भेजें:\n"
         + SEBI_DISCLAIMER_TEXT
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_keyboard())
 
+async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot_me = await context.bot.get_me()
+    ref_link = f"https://t.me/{bot_me.username}?start=ref_{user_id}"
+
+    refs = load_data(REFERRALS_FILE, {})
+    user_invites = len(refs.get(str(user_id), []))
+    status_str = "✅ <b>VIP Status Unlocked! (No 30s Wait Timer)</b>" if user_invites >= 3 else f"⏳ <b>{3 - user_invites} और दोस्तों को जोड़ें VIP बनने के लिए!</b>"
+
+    msg = (
+        "👥 <b>UNIVERSAL OP BOT • VIP REFERRAL SYSTEM</b>\n\n"
+        f"🔗 <b>आपका पर्सनल इनवाइट लिंक:</b>\n<code>{ref_link}</code>\n\n"
+        f"📊 <b>आपके कुल रेफर्ड यूज़र्स:</b> <code>{user_invites} / 3</code>\n"
+        f"⚡ <b>Status:</b> {status_str}\n\n"
+        "💡 <i>अपने 3 दोस्तों को बॉट से जोड़ें और 30-सेकंड का वेट टाइमर हमेशा के लिए बंद करें!</i>"
+        + SEBI_DISCLAIMER_TEXT
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📤 Share With Friends (शेयर करें)", url=f"https://t.me/share/url?url={ref_link}&text=Get%20Free%20Intraday%20OP%20Levels%20%26%202%25%20Strikes%20Daily!")]])
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=markup)
+
+async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🧮 <b>INTRADAY LOT SIZE & RISK CALCULATOR</b>\n\n"
+        "उपयोग का तरीका:\n"
+        "<code>/calc &lt;Total Capital&gt; &lt;Risk%&gt;</code>\n\n"
+        "उदाहरण:\n"
+        "<code>/calc 50000 2</code>  <i>(₹50,000 कैपिटल और 2% रिस्क)</i>"
+        + SEBI_DISCLAIMER_TEXT
+    )
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(help_text, parse_mode="HTML")
+        return
+
+    try:
+        cap = float(context.args[0])
+        risk_pct = float(context.args[1])
+        risk_amt = round(cap * (risk_pct / 100.0), 2)
+
+        # Standard sl reference: Nifty 20 pts sl, Bank Nifty 40 pts sl
+        nifty_lot_size = 25
+        nifty_risk_per_lot = 20 * nifty_lot_size
+        nifty_lots = max(1, int(risk_amt / nifty_risk_per_lot))
+
+        bn_lot_size = 15
+        bn_risk_per_lot = 40 * bn_lot_size
+        bn_lots = max(1, int(risk_amt / bn_risk_per_lot))
+
+        res_msg = (
+            f"🧮 <b>RISK MANAGEMENT ANALYSIS</b>\n\n"
+            f"💵 <b>Capital:</b> ₹{cap:,.2f}\n"
+            f"⚠️ <b>Max Risk ({risk_pct}%):</b> ₹{risk_amt:,.2f}\n\n"
+            f"📊 <b>NIFTY 50 (20 pts SL assumed):</b>\n"
+            f"  • Safe Quantity: <b>{nifty_lots * nifty_lot_size} qty</b> ({nifty_lots} lots)\n\n"
+            f"📈 <b>BANK NIFTY (40 pts SL assumed):</b>\n"
+            f"  • Safe Quantity: <b>{bn_lots * bn_lot_size} qty</b> ({bn_lots} lots)\n\n"
+            f"<i>Never risk more than {risk_pct}% on a single trading day!</i>"
+            + SEBI_DISCLAIMER_TEXT
+        )
+        await update.message.reply_text(res_msg, parse_mode="HTML")
+    except Exception:
+        await update.message.reply_text("❌ कृपया सही नंबर डालें। उदाहरण: <code>/calc 50000 2</code>", parse_mode="HTML")
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    users = load_users()
+    users = load_data(USERS_FILE, [])
+    refs = load_data(REFERRALS_FILE, {})
     await update.message.reply_text(
         f"📊 <b>Bot Admin Analytics:</b>\n\n"
         f"👥 कुल एक्टिव यूज़र्स: <b>{len(users)}</b>\n"
+        f"🔗 रेफरल डेटाबेस साइज: <b>{len(refs)} referrers</b>\n"
         f"📢 ऑफिशियल चैनल: @LIVEOPTIONDATA", 
         parse_mode="HTML"
     )
@@ -362,29 +506,21 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ उपयोग: <code>/broadcast आपका प्रचार संदेश</code>", 
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ उपयोग: <code>/broadcast आपका संदेश</code>", parse_mode="HTML")
         return
 
     text_to_broadcast = " ".join(context.args)
     final_broadcast_msg = text_to_broadcast + SEBI_DISCLAIMER_TEXT
-    users = load_users()
+    users = load_data(USERS_FILE, [])
     sent_count = 0
     failed_count = 0
 
-    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट भेजा जा रहा है... (कुल {len(users)} यूज़र्स को)")
+    status_msg = await update.message.reply_text(f"⏳ ब्रॉडकास्ट भेजा जा रहा है... ({len(users)} यूज़र्स को)")
     channel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Channel (@LIVEOPTIONDATA)", url=CHANNEL_LINK)]])
 
     for uid in users:
         try:
-            await context.bot.send_message(
-                chat_id=uid, 
-                text=final_broadcast_msg, 
-                parse_mode="HTML",
-                reply_markup=channel_markup
-            )
+            await context.bot.send_message(chat_id=uid, text=final_broadcast_msg, parse_mode="HTML", reply_markup=channel_markup)
             sent_count += 1
             await asyncio.sleep(0.05)
         except Exception:
@@ -434,22 +570,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.message.delete()
         
-        status_msg = await context.bot.send_message(
-            chat_id=user_id, 
-            text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं...", 
-            parse_mode="HTML"
-        )
+        status_msg = await context.bot.send_message(chat_id=user_id, text=f"⏳ <b>{symbol}</b> के OP लेवल्स निकाले जा रहे हैं...", parse_mode="HTML")
         
         try:
             df, matched_symbol = fetch_data(symbol)
             if df is None:
-                await status_msg.edit_text(
-                    f"❌ <b>'{symbol}'</b> का डेटा नहीं मिला।" + SEBI_DISCLAIMER_TEXT,
-                    parse_mode="HTML"
-                )
+                await status_msg.edit_text(f"❌ <b>'{symbol}'</b> का डेटा नहीं मिला।" + SEBI_DISCLAIMER_TEXT, parse_mode="HTML")
                 return
 
-            lvl = calculate_op_levels(df)
+            lvl = calculate_op_levels(df, symbol)
             ist = pytz.timezone('Asia/Kolkata')
             today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
             formatted_msg = format_color_display(matched_symbol, today_str, lvl)
@@ -521,13 +650,7 @@ async def live_countdown_unlock(bot, chat_id, message_id, query_symbol):
     ])
     
     try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=final_text,
-            parse_mode="HTML",
-            reply_markup=unlocked_markup
-        )
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=final_text, parse_mode="HTML", reply_markup=unlocked_markup)
     except Exception as e:
         logging.error(f"Error updating message after delay: {e}")
 
@@ -541,6 +664,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "HOW TO USE" in raw_text.upper() or "गाइड" in raw_text:
         await send_how_to_use(update)
+        return
+
+    if "VIP REFERRAL LINK" in raw_text.upper():
+        await referral_command(update, context)
+        return
+
+    if "LOT SIZE CALCULATOR" in raw_text.upper():
+        await calc_command(update, context)
         return
 
     if "OFFICIAL CHANNEL" in raw_text.upper():
@@ -559,6 +690,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Check for VIP status: VIP bypasses 30s timer directly
+    if is_vip_user(user_id):
+        status_msg = await update.message.reply_text(f"⚡ <b>VIP Instant Access:</b> {clean_symbol} के लेवल्स लोड हो रहे हैं...", parse_mode="HTML")
+        df, matched_symbol = fetch_data(clean_symbol)
+        if df is not None:
+            lvl = calculate_op_levels(df, clean_symbol)
+            ist = pytz.timezone('Asia/Kolkata')
+            today_str = datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST')
+            formatted_msg = format_color_display(matched_symbol, today_str, lvl)
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]])
+            await status_msg.delete()
+            await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=markup)
+            return
+
+    # Normal user gets the 30s visit timer
     start_box = make_big_timer_box(30)
     initial_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👉 1. Open Channel & View Ad (30s)", url=CHANNEL_LINK)]
@@ -584,12 +730,14 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("ref", referral_command))
+    app.add_handler(CommandHandler("calc", calc_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
     
-    print("Bot is polling live clean with Current Price support...")
+    print("Bot is polling live with Pro Suite (Strikes, Pre-Open, VIP Referral, Calc)...")
     app.run_polling()
 
 if __name__ == "__main__":
