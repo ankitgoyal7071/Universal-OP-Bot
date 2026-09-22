@@ -11,7 +11,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
-TELEGRAM_BOT_TOKEN = "8983062859:AAFUVGuT0za1H9TQu0p-k_8Ri-IwxD5ebMs"
+TELEGRAM_BOT_TOKEN = "8983062859:AAH0l6D3kqC1rVllTYX7tQLFBDOqd8po_lI"
 ADMIN_ID = 1612210913
 
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
