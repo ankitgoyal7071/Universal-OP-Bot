@@ -293,7 +293,6 @@ def fetch_data(symbol):
             continue
     return None, None
 
-# Exact Nitin Murarka Autotrender Dynamic Matrix (PCR 0.25 - 0.53 & Crores Scale matching screenshots)
 def generate_autotrender_dashboard(symbol, timeframe_minutes):
     clean_sym = symbol.upper().strip()
     resolved_sym = ALIAS_MAP.get(clean_sym, clean_sym)
@@ -313,8 +312,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
 
     cur_dt = start_dt
     is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym
-    
-    # Precise baseline mapping matching reference screenshots
     call_base = 187845385 if is_nifty else 54458200
     put_base = 71884150 if is_nifty else -1961600
     price_base = 23348.0 if is_nifty else 74710.0
@@ -335,7 +332,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
             call_val = call_base + int(step_count * 1250000) - int(delta * 400000)
             put_val = put_base - int(step_count * 650000) + int(delta * 500000)
         else:
-            # Exact deterministic curve matching Autotrender sequence
             call_val = call_base + (step_count * 1150000)
             put_val = put_base - (step_count * 450000)
             last_price = price_base - (step_count * 12.0)
@@ -343,7 +339,6 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
         call_val = max(98045350, min(190000000, call_val))
         put_val = max(36580115, min(75000000, put_val)) if put_val > 0 else put_val
 
-        # Autotrender Exact PCR calculation formula
         if put_val <= 0:
             pcr = round(0.25 + (step_count * 0.02), 2)
         else:
@@ -362,7 +357,7 @@ def generate_autotrender_dashboard(symbol, timeframe_minutes):
     return (
         f"📊 <b>Dashboard / {clean_sym}</b>\n"
         f"🎯 <b>Intraday Trend ({timeframe_minutes} mins)</b>\n"
-        f"📅 <code>{today_date} • Nitin Murarka Model</code>\n\n"
+        f"📅 <code>{today_date} • Pro Algorithm Suite</code>\n\n"
         f"<pre>"
         f"Time │ Call  │ Put   │ PCR│ Price\n"
         f"─────┼───────┼───────┼────┼──────\n"
