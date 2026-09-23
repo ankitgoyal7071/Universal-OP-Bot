@@ -40,7 +40,7 @@ NSE_HOLIDAYS = {
 SEBI_DISCLAIMER_TEXT = (
     "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
     "⚖️ <b>SEBI REGULATORY DISCLAIMER:</b>\n"
-    "<i>All levels, strikes & calculations are purely algorithmic formulas for EDUCATIONAL & PAPER TRADING purposes only.</i>\n"
+    "<i>All levels, strikes & calculations are purely algorithmic formulas for EDUCATIONAL & PAPER TRADING purposes only. Trading involves high market risk.</i>\n"
     "🔒 <b>Official Channel:</b> @LIVEOPTIONDATA"
 )
 
@@ -100,6 +100,104 @@ def validate_market_access(symbol=""):
             
     return True, ""
 
+# 🟢 FII / DII Data Fetcher System
+def fetch_fii_dii_data():
+    try:
+        session = requests.Session()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.nseindia.com',
+        }
+        session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        res = session.get("https://www.nseindia.com/api/fiidiiTradeReact", headers=headers, timeout=6)
+        
+        if res.status_code == 200:
+            data = res.json()
+            ist = pytz.timezone('Asia/Kolkata')
+            today_str = datetime.now(ist).strftime('%d-%b-%Y')
+            
+            msg = [
+                "🏛️ <b>NSE FII / DII CASH MARKET ACTIVITY</b>",
+                f"📅 <code>{today_str}</code>",
+                "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+            ]
+            fii_net, dii_net = 0, 0
+            for row in data:
+                cat = row.get('category', '')
+                buy = float(row.get('buyValue', 0))
+                sell = float(row.get('sellValue', 0))
+                net = float(row.get('netValue', 0))
+                status = "🟢 Net Buyer" if net > 0 else "🔴 Net Seller"
+                
+                if "FII" in cat:
+                    fii_net = net
+                    msg.extend([
+                        "👤 <b>FII / FPI Activity:</b>",
+                        f"• Buy: <code>₹{buy:,.2f} Cr</code>",
+                        f"• Sell: <code>₹{sell:,.2f} Cr</code>",
+                        f"• Net: <b>₹{net:+,.2f} Cr ({status})</b>\n"
+                    ])
+                elif "DII" in cat:
+                    dii_net = net
+                    msg.extend([
+                        "🏢 <b>DII Activity:</b>",
+                        f"• Buy: <code>₹{buy:,.2f} Cr</code>",
+                        f"• Sell: <code>₹{sell:,.2f} Cr</code>",
+                        f"• Net: <b>₹{net:+,.2f} Cr ({status})</b>\n"
+                    ])
+            
+            total_net = fii_net + dii_net
+            sentiment = "🟢 <b>Overall Mood: Bullish (Net Inflow)</b>" if total_net > 0 else "🔴 <b>Overall Mood: Bearish (Net Outflow)</b>"
+            msg.extend([
+                "<code>──────────────────────────────</code>",
+                f"📊 <b>Combined Institutional Net Flow:</b> <code>₹{total_net:+,.2f} Cr</code>",
+                sentiment
+            ])
+            msg.append(SEBI_DISCLAIMER_TEXT)
+            return "\n".join(msg)
+    except Exception as e:
+        logging.error(f"FII/DII Fetch Error: {e}")
+
+    # Fallback message during live hours before evening NSE release
+    return (
+        "🏛️ <b>NSE FII / DII CASH MARKET ACTIVITY</b>\n"
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        "ℹ️ <i>NSE Provisional Cash Data आमतौर पर शाम 5:30 PM के बाद अपडेट होता है।</i>\n\n"
+        "• <b>FII Activity:</b> Tracking active cash market flow...\n"
+        "• <b>DII Activity:</b> Tracking domestic liquidity injection...\n\n"
+        "💡 <i>मार्केट ऑवर्स के दौरान FII/DII डेरिवेटिव्स और ओपन इंटरेस्ट स्विंग्स के साथ ट्रेड करें।</i>"
+        + SEBI_DISCLAIMER_TEXT
+    )
+
+# 📅 Economic Calendar System
+def get_economic_calendar():
+    ist = pytz.timezone('Asia/Kolkata')
+    curr_month = datetime.now(ist).strftime('%B %Y')
+    return (
+        f"📅 <b>GLOBAL ECONOMIC CALENDAR & KEY EVENTS ({curr_month})</b>\n"
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        "⚡ <b>Major Macro Events & Market Drivers:</b>\n\n"
+        "🏦 <b>1. RBI MPC Meeting & Rate Decision:</b>\n"
+        "• <i>Key Focus:</i> Repo Rate, Inflation Guidance\n"
+        "• <i>High Impact:</i> BankNifty, FinNifty, Realty, Auto Stocks\n\n"
+        "🇺🇸 <b>2. US Fed FOMC Interest Rate Decision:</b>\n"
+        "• <i>Timing:</i> 11:30 PM / 12:30 AM IST\n"
+        "• <i>High Impact:</i> Global Markets, Nifty 50, IT Sector, Gold\n\n"
+        "📈 <b>3. India CPI & WPI Inflation / IIP Data:</b>\n"
+        "• <i>Schedule:</i> Monthly around 12th\n"
+        "• <i>Impact:</i> Domestic Macro & Bond Yields\n\n"
+        "💼 <b>4. US Non-Farm Payrolls (NFP) & Jobs Data:</b>\n"
+        "• <i>Timing:</i> First Friday of every month (6:00 PM / 7:00 PM IST)\n"
+        "• <i>Impact:</i> Dollar Index (DXY), MCX Gold & Silver\n\n"
+        "🛢️ <b>5. US EIA Crude Oil Inventories:</b>\n"
+        "• <i>Schedule:</i> Every Wednesday 8:00 PM IST\n"
+        "• <i>Impact:</i> MCX Crude Oil, Aviation & Paint Stocks\n\n"
+        "💡 <i>Tip: High-impact events के दिन बिना कन्फर्मेशन के ओवरनाईट पोजीशन कैरी न करें।</i>"
+        + SEBI_DISCLAIMER_TEXT
+    )
+
+# Render Keep-Alive Web Server
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -144,7 +242,6 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
         return False
 
 def get_main_menu_keyboard():
-    # यहाँ से Autotrender Tab हमेशा के लिए हटा दिया गया है
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
@@ -361,6 +458,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
         return
 
+    elif text == "🏛️ FII/DII Data":
+        msg_wait = await update.message.reply_text("⏳ <i>Fetching live FII / DII institutional data...</i>", parse_mode="HTML")
+        fii_data_msg = fetch_fii_dii_data()
+        await msg_wait.edit_text(fii_data_msg, parse_mode="HTML")
+        return
+
+    elif text == "📅 Economic Calendar":
+        calendar_msg = get_economic_calendar()
+        await update.message.reply_text(calendar_msg, parse_mode="HTML")
+        return
+
     elif text == "🥇 Commodity Tab":
         await update.message.reply_text("कमोडिटी चुनें:", reply_markup=get_commodity_keyboard())
         return
@@ -387,8 +495,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
             "1. <b>OP Levels Tab:</b> Click to check exact mathematical levels (Buy Above, Ready for Entry, T1, T2) for Nifty, BankNifty, and other major indices.\n"
-            "2. <b>Commodity Tab:</b> Check Gold, Silver, Crude, and Natural Gas levels.\n"
-            "3. <b>Referral:</b> Invite 3 friends using your link to unlock VIP access."
+            "2. <b>🏛️ FII/DII Data:</b> Check daily institutional buying and selling cash activity.\n"
+            "3. <b>📅 Economic Calendar:</b> Check upcoming high-impact RBI, US Fed, Inflation, and crude meetings.\n"
+            "4. <b>🥇 Commodity Tab:</b> Check Gold, Silver, Crude, and Natural Gas levels.\n"
+            "5. <b>👥 Referral:</b> Invite 3 friends using your link to unlock VIP access."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
