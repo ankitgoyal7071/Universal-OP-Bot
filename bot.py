@@ -105,7 +105,7 @@ def validate_market_access(symbol="", request_type="level"):
         if total_mins < 570: # 9:30 AM
             return False, "⏳ <b>कृपया 9:30 AM के बाद प्रयास करें!</b> (Pre-market data generation in progress)"
     elif request_type == "autotrender":
-        if total_mins < 600: # 10:00 AM
+        if total_mins < 600: # 10:00 AM Sharp
             return False, "⏳ <b>कृपया 10:00 AM के बाद प्रयास करें!</b> (PCR & Autotrender live data starts at 10:00 AM)"
             
     return True, ""
@@ -611,7 +611,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lvl_"):
         symbol = data.replace("lvl_", "").strip()
         
-        # Check market timing for Levels (Crypto allowed anytime, others restricted before 9:30 AM)
+        # Check market timing for Levels (Crypto allowed 24/7, others restricted before 9:30 AM)
         allowed, err_msg = validate_market_access(symbol, "level")
         if not allowed:
             await query.answer(err_msg.replace("<b>", "").replace("</b>", "").replace("⏳ ", "").replace("⚠️ ", ""), show_alert=True)
@@ -735,7 +735,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lvl = calculate_op_levels(df, clean_symbol)
             ist = pytz.timezone('Asia/Kolkata')
             formatted_msg = format_color_display(matched_symbol, datetime.now(ist).strftime('%Y-%m-%d %I:%M %p IST'), lvl, clean_symbol)
-            buttons = [[InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol}")], [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]]
+            buttons = [[InlineKeyboardButton("📊 5m Autotrender", callback_data=f"at_5_{clean_symbol}"), InlineKeyboardButton("📈 15m Autotrender", callback_data=f"at_15_{clean_symbol})], [InlineKeyboardButton("📢 Official Channel", url=CHANNEL_LINK)]]
             await status_msg.delete()
             await update.message.reply_text(formatted_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
             return
