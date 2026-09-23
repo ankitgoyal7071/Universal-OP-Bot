@@ -100,7 +100,6 @@ def validate_market_access(symbol=""):
             
     return True, ""
 
-# Render Health Check Server (Prevents App Exited Early)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -403,6 +402,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
         
+        df, resolved_sym = fetch_test = fetch_data(text) if 'fetch_data' else (None, None)
         df, resolved_sym = fetch_data(text)
         if df is not None:
             ist = pytz.timezone('Asia/Kolkata')
@@ -431,7 +431,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ आपने अभी तक चैनल जॉइन नहीं किया है!", show_alert=True)
 
 def main():
-    # Start background web server for Render keep-alive
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
