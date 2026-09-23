@@ -84,7 +84,8 @@ def is_vip_user(user_id):
 
 def validate_market_access(symbol=""):
     sym_upper = symbol.upper()
-    if "BTC" in sym_upper or "ETH" in sym_upper or "-USD" in sym_upper:
+    # Crypto trades 24/7, bypass holiday/weekend restrictions
+    if "BTC" in sym_upper or "ETH" in sym_upper or "BITCOIN" in sym_upper or "ETHEREUM" in sym_upper or "-USD" in sym_upper:
         return True, ""
 
     ist = pytz.timezone('Asia/Kolkata')
@@ -100,7 +101,7 @@ def validate_market_access(symbol=""):
             
     return True, ""
 
-# 🟢 FII / DII Data Fetcher System
+# 🏛️ FII / DII Data Fetcher System
 def fetch_fii_dii_data():
     try:
         session = requests.Session()
@@ -159,14 +160,10 @@ def fetch_fii_dii_data():
     except Exception as e:
         logging.error(f"FII/DII Fetch Error: {e}")
 
-    # Fallback message during live hours before evening NSE release
     return (
         "🏛️ <b>NSE FII / DII CASH MARKET ACTIVITY</b>\n"
         "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        "ℹ️ <i>NSE Provisional Cash Data आमतौर पर शाम 5:30 PM के बाद अपडेट होता है।</i>\n\n"
-        "• <b>FII Activity:</b> Tracking active cash market flow...\n"
-        "• <b>DII Activity:</b> Tracking domestic liquidity injection...\n\n"
-        "💡 <i>मार्केट ऑवर्स के दौरान FII/DII डेरिवेटिव्स और ओपन इंटरेस्ट स्विंग्स के साथ ट्रेड करें।</i>"
+        "ℹ️ <i>NSE Provisional Cash Data शाम 5:30 PM के बाद अपडेट होता है।</i>"
         + SEBI_DISCLAIMER_TEXT
     )
 
@@ -179,25 +176,18 @@ def get_economic_calendar():
         "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
         "⚡ <b>Major Macro Events & Market Drivers:</b>\n\n"
         "🏦 <b>1. RBI MPC Meeting & Rate Decision:</b>\n"
-        "• <i>Key Focus:</i> Repo Rate, Inflation Guidance\n"
         "• <i>High Impact:</i> BankNifty, FinNifty, Realty, Auto Stocks\n\n"
         "🇺🇸 <b>2. US Fed FOMC Interest Rate Decision:</b>\n"
-        "• <i>Timing:</i> 11:30 PM / 12:30 AM IST\n"
         "• <i>High Impact:</i> Global Markets, Nifty 50, IT Sector, Gold\n\n"
-        "📈 <b>3. India CPI & WPI Inflation / IIP Data:</b>\n"
-        "• <i>Schedule:</i> Monthly around 12th\n"
+        "📈 <b>3. India CPI Inflation & IIP Data:</b>\n"
         "• <i>Impact:</i> Domestic Macro & Bond Yields\n\n"
-        "💼 <b>4. US Non-Farm Payrolls (NFP) & Jobs Data:</b>\n"
-        "• <i>Timing:</i> First Friday of every month (6:00 PM / 7:00 PM IST)\n"
+        "💼 <b>4. US Non-Farm Payrolls (NFP):</b>\n"
         "• <i>Impact:</i> Dollar Index (DXY), MCX Gold & Silver\n\n"
         "🛢️ <b>5. US EIA Crude Oil Inventories:</b>\n"
-        "• <i>Schedule:</i> Every Wednesday 8:00 PM IST\n"
-        "• <i>Impact:</i> MCX Crude Oil, Aviation & Paint Stocks\n\n"
-        "💡 <i>Tip: High-impact events के दिन बिना कन्फर्मेशन के ओवरनाईट पोजीशन कैरी न करें।</i>"
+        "• <i>Impact:</i> MCX Crude Oil, Energy Stocks"
         + SEBI_DISCLAIMER_TEXT
     )
 
-# Render Keep-Alive Web Server
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -228,7 +218,9 @@ ALIAS_MAP = {
     "CRUDE": "CL=F",
     "NATURALGAS": "NG=F",
     "BTC": "BTC-USD",
-    "ETH": "ETH-USD"
+    "BITCOIN": "BTC-USD",
+    "ETH": "ETH-USD",
+    "ETHEREUM": "ETH-USD"
 }
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -245,7 +237,8 @@ def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
-        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("👥 VIP Referral Link")],
+        [KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -259,6 +252,12 @@ def get_commodity_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
         [KeyboardButton("🛢️ CRUDE OIL"), KeyboardButton("🔥 NATURAL GAS")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_crypto_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🪙 BITCOIN (BTC)"), KeyboardButton("🪙 ETHEREUM (ETH)")],
         [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
 
@@ -382,7 +381,7 @@ def fetch_data(symbol):
 
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     out = [
-        f"📊 <b>{matched_symbol} • PRO OP LEVELS ALGO</b>",
+        f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
         f"📅 <code>{today_str}</code>",
         f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
         f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
@@ -432,7 +431,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
-        "नीचे दिए गए मेनू से अपनी पसंद का विकल्प चुनें:",
+        "नीचे दिए गए मेनू से विकल्प चुनें या स्टॉक/क्रिप्टो नाम (जैसे RELIANCE, BTC, ETH) टाइप करें:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
@@ -456,6 +455,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "📊 OP Levels Tab":
         await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
+        return
+
+    elif text == "🪙 Crypto Tab":
+        await update.message.reply_text("क्रिप्टोकरेंसी चुनें (24/7 Live):", reply_markup=get_crypto_keyboard())
         return
 
     elif text == "🏛️ FII/DII Data":
@@ -494,34 +497,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>OP Levels Tab:</b> Click to check exact mathematical levels (Buy Above, Ready for Entry, T1, T2) for Nifty, BankNifty, and other major indices.\n"
-            "2. <b>🏛️ FII/DII Data:</b> Check daily institutional buying and selling cash activity.\n"
-            "3. <b>📅 Economic Calendar:</b> Check upcoming high-impact RBI, US Fed, Inflation, and crude meetings.\n"
-            "4. <b>🥇 Commodity Tab:</b> Check Gold, Silver, Crude, and Natural Gas levels.\n"
-            "5. <b>👥 Referral:</b> Invite 3 friends using your link to unlock VIP access."
+            "1. <b>OP Levels / Stocks:</b> Nifty/BankNifty या कोई भी स्टॉक (जैसे RELIANCE, TCS) सीधे टाइप करें।\n"
+            "2. <b>🪙 Crypto Tab:</b> Bitcoin (BTC) और Ethereum (ETH) के 24/7 लेवल्स चेक करें।\n"
+            "3. <b>🏛️ FII/DII Data:</b> Check institutional cash activity.\n"
+            "4. <b>📅 Economic Calendar:</b> Check macro events.\n"
+            "5. <b>🥇 Commodity Tab:</b> Gold, Silver, Crude, Natural Gas."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
 
     elif text in ["📊 NIFTY 50", "📈 BANK NIFTY", "🪙 FIN NIFTY", "⚡ SENSEX", "⚡ MIDCAP NIFTY", 
-                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS"]:
+                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS",
+                  "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
-        ok, err_msg = validate_market_access(text)
+        query_sym = "BTC" if "BITCOIN" in text else ("ETH" if "ETHEREUM" in text else text)
+        ok, err_msg = validate_market_access(query_sym)
         if not ok:
             await update.message.reply_text(err_msg, parse_mode="HTML")
             return
 
         msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
         
-        df, resolved_sym = fetch_data(text)
+        df, resolved_sym = fetch_data(query_sym)
         if df is not None:
             ist = pytz.timezone('Asia/Kolkata')
             today_str = datetime.now(ist).strftime('%Y-%m-%d')
-            lvl = calculate_op_levels(df, text)
-            response_text = format_color_display(text, today_str, lvl, text)
+            lvl = calculate_op_levels(df, query_sym)
+            response_text = format_color_display(text, today_str, lvl, query_sym)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
             await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed. Please try again later.", parse_mode="HTML")
+        return
+
+    else:
+        # किसी भी कस्टम स्टॉक या क्रिप्टो (जैसे RELIANCE, BTC, ETH) के नाम को प्रोसेस करने के लिए
+        symbol_input = text.strip()
+        ok, err_msg = validate_market_access(symbol_input)
+        if not ok:
+            await update.message.reply_text(err_msg, parse_mode="HTML")
+            return
+
+        msg_wait = await update.message.reply_text(f"⏳ <i>Fetching algorithm levels for {symbol_input.upper()}...</i>", parse_mode="HTML")
+        
+        df, resolved_sym = fetch_data(symbol_input)
+        if df is not None:
+            ist = pytz.timezone('Asia/Kolkata')
+            today_str = datetime.now(ist).strftime('%Y-%m-%d')
+            lvl = calculate_op_levels(df, symbol_input)
+            response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
+            await msg_wait.edit_text(response_text, parse_mode="HTML")
+        else:
+            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल (जैसे RELIANCE, BTC, ETH) टाइप करें।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
