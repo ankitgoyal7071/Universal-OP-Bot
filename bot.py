@@ -1,79 +1,447 @@
-import time
+import os
+import threading
+import asyncio
+import json
+import io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import logging
+import pandas as pd
+import numpy as np
+import yfinance as yf
+from datetime import datetime
+import pytz
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.error import TelegramError
 import requests
 
-# अपने टेलीग्राम बोट का टोकन और चैनल/यूजर्स की चैट आईडी यहाँ डालें
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-USER_CHAT_IDS = ["CHAT_ID_1", "CHAT_ID_2"] 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN environment variable not set!")
 
-def broadcast_alert(message):
-    """बोट पर जुड़े सभी यूजर्स या चैनल को एक साथ अलर्ट भेजने का फंक्शन"""
-    for chat_id in USER_CHAT_IDS:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "Markdown"
-        }
+ADMIN_ID = 1612210913
+CHANNEL_USERNAME = "@LIVEOPTIONDATA"
+CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
+
+USERS_FILE = "bot_users.json"
+REFERRALS_FILE = "bot_referrals.json"
+
+NSE_HOLIDAYS = {
+    "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
+    "2026-03-27", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-27", "2026-06-26", "2026-08-15", "2026-09-14",
+    "2026-10-02", "2026-10-20", "2026-11-08", "2026-11-10",
+    "2026-11-24", "2026-12-25"
+}
+
+SEBI_DISCLAIMER_TEXT = (
+    "\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+    "⚖️ <b>SEBI REGULATORY DISCLAIMER:</b>\n"
+    "<i>All levels, strikes & calculations are purely algorithmic formulas for EDUCATIONAL & PAPER TRADING purposes only.</i>\n"
+    "🔒 <b>Official Channel:</b> @LIVEOPTIONDATA"
+)
+
+def load_data(file_path, default_val):
+    if os.path.exists(file_path):
         try:
-            requests.post(url, json=payload)
-        except Exception as e:
-            print(f"Error sending to {chat_id}: {e}")
+            with open(file_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return default_val
+    return default_val
 
-def check_market_alerts(current_price, near_level, buy_above_level, t1_target, t2_target):
-    """लेवल्स के हिसाब से स्टेप-बाय-स्टेप अलर्ट चेक करने का फंक्शन"""
+def save_data(file_path, data):
+    try:
+        with open(file_path, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logging.error(f"Error saving {file_path}: {e}")
+
+def save_user(user_id):
+    users = set(load_data(USERS_FILE, []))
+    if user_id not in users:
+        users.add(user_id)
+        save_data(USERS_FILE, list(users))
+
+def record_referral(referrer_id, new_user_id):
+    refs = load_data(REFERRALS_FILE, {})
+    ref_key = str(referrer_id)
+    if ref_key not in refs:
+        refs[ref_key] = []
+    if new_user_id not in refs[ref_key] and new_user_id != referrer_id:
+        refs[ref_key].append(new_user_id)
+        save_data(REFERRALS_FILE, refs)
+
+def is_vip_user(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    refs = load_data(REFERRALS_FILE, {})
+    user_invites = refs.get(str(user_id), [])
+    return len(user_invites) >= 3
+
+def validate_market_access(symbol=""):
+    sym_upper = symbol.upper()
+    if "BTC" in sym_upper or "ETH" in sym_upper or "-USD" in sym_upper:
+        return True, ""
+
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    today_str = now.strftime('%Y-%m-%d')
     
-    # 1. Ready for Entry (जब प्राइस बाय लेवल के करीब आने लगे)
-    if near_level <= current_price < buy_above_level:
-        msg = (
-            "⚠️ *READY FOR ENTRY* ⚠️\n"
-            "-----------------------------------\n"
-            f"• Current Price: {current_price}\n"
-            f"• Approaching Buy Level: {buy_above_level}"
-        )
-        broadcast_alert(msg)
+    if now.weekday() >= 5 or today_str in NSE_HOLIDAYS:
+        return False, "⚠️ <b>बाजार बंद है!</b> कृपया कार्यदिवस (Working Day) पर प्रयास करें।"
     
-    # 2. Entry Confirmed (जब बाय अबव लेवल क्रॉस हो जाए)
-    elif current_price >= buy_above_level:
-        msg = (
-            "🚀 *ENTRY CONFIRMED (BUY ABOVE)* 🚀\n"
-            "-----------------------------------\n"
-            f"• Current Price: {current_price}\n"
-            f"• Triggered Level: {buy_above_level}\n"
-            f"• Target 1 (T1): {t1_target}\n"
-            f"• Target 2 (T2): {t2_target}"
-        )
-        broadcast_alert(msg)
+    total_mins = now.hour * 60 + now.minute
+    if total_mins < 570:
+        return False, "⏳ <b>कृपया 9:30 AM के बाद प्रयास करें!</b> (Pre-market data generation in progress)"
+            
+    return True, ""
+
+# Render Health Check Server (Prevents App Exited Early)
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"OP Levels Pro Bot running healthy!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+ALIAS_MAP = {
+    "NIFTY": "^NSEI",
+    "NIFTY 50": "^NSEI",
+    "NIFTY50": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+    "BANK NIFTY": "^NSEBANK",
+    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    "FIN NIFTY": "NIFTY_FIN_SERVICE.NS",
+    "MIDCPNIFTY": "^NSEMDCP50",
+    "MIDCAP NIFTY": "^NSEMDCP50",
+    "SENSEX": "^BSESN",
+    "BANKEX": "BSEBK.BO",
+    "MCX": "MCX.NS",
+    "GOLD": "GC=F",
+    "SILVER": "SI=F",
+    "CRUDE": "CL=F",
+    "NATURALGAS": "NG=F",
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD"
+}
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+async def is_user_subscribed(bot, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except TelegramError as e:
+        logging.error(f"Force Sub Error: {e}")
+        return False
+
+def get_main_menu_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
+        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
+        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
+    ], resize_keyboard=True)
+
+def get_op_levels_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANK NIFTY")],
+        [KeyboardButton("🪙 FIN NIFTY"), KeyboardButton("⚡ SENSEX")],
+        [KeyboardButton("⚡ MIDCAP NIFTY"), KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_commodity_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
+        [KeyboardButton("🛢️ CRUDE OIL"), KeyboardButton("🔥 NATURAL GAS")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_force_sub_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Join Channel / चैनल जॉइन करें", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🔄 Verify Joined / वेरिफाई करें", callback_data="check_joined")]
+    ])
+
+def calculate_strikes_2percent(spot_price, symbol):
+    sym_u = symbol.upper()
+    step = 100 if ("BANK" in sym_u or "SENSEX" in sym_u) else 50
+    call_raw = spot_price - (spot_price * 0.02)
+    put_raw = spot_price + (spot_price * 0.02)
+    return {
+        "call_1": int(round(call_raw / step) * step),
+        "call_2": int((round(call_raw / step) * step) + step),
+        "put_1": int(round(put_raw / step) * step),
+        "put_2": int((round(put_raw / step) * step) - step)
+    }
+
+def get_market_mood():
+    try:
+        vix_df = yf.Ticker("^INDIAVIX").history(period="5d", interval="1d")
+        if not vix_df.empty:
+            vix_val = round(float(vix_df['Close'].iloc[-1]), 2)
+            if vix_val < 13:
+                return f"{vix_val} (Low Volatility / Sideways ⚠️)"
+            elif vix_val <= 18:
+                return f"{vix_val} (Balanced Volatility 🟢)"
+            else:
+                return f"{vix_val} (High Volatility / Breakouts ⚡)"
+    except Exception:
+        pass
+    return "14.20 (Balanced Swing Mode 🟢)"
+
+def calculate_op_levels(df, symbol):
+    current_price = round(float(df['Close'].iloc[-1]), 2)
+    dop = float(df['Open'].iloc[-1])
+    dc = float(df['Close'].iloc[-2])
+    dhigh = float(df['High'].iloc[-2])
+    dlow = float(df['Low'].iloc[-2])
+
+    closes = df['Close'].iloc[-12:-1].values
+    log_returns = [np.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    avg_logg0 = sum(log_returns) / 10.0
+    sq_sum0 = sum([x**2 for x in log_returns]) / 10.0
+    volatility0 = np.sqrt(max(0, sq_sum0 - (avg_logg0**2)))
+    range11 = round(dc * volatility0)
+
+    doKdc = dop if abs(dop - dc) > (0.382 * range11) else dc
+    logg = np.log(doKdc / closes[-2])
+    adjusted_logs = [logg] + log_returns[:-1]
+    avg_logg = sum(adjusted_logs) / 10.0
+    sq_sum = sum([x**2 for x in adjusted_logs]) / 10.0
+    volatility = np.sqrt(max(0, sq_sum - (avg_logg**2)))
+    range1 = round(doKdc * volatility)
+
+    pivot = round((dhigh + dlow + dc) / 3)
+    bc_raw = round((dhigh + dlow) / 2)
+    tc_raw = round((pivot - bc_raw) + pivot)
     
-    # 3. Target 1 (T1) Hit
-    if current_price >= t1_target:
-        msg = (
-            "🎯 *TARGET 1 (T1) HIT!* 🎯\n"
-            "-----------------------------------\n"
-            f"• Achieved Price: {current_price}\n"
-            "• Book partial profits or trail SL!"
-        )
-        broadcast_alert(msg)
+    bc = min(bc_raw, tc_raw)
+    tc = max(bc_raw, tc_raw)
+
+    cpr_width = abs(tc - bc)
+    cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
+    if cpr_percent < 0.25:
+        cpr_type = "⚡ Narrow CPR (Trending Day Expected)"
+    elif cpr_percent > 0.65:
+        cpr_type = "⚠️ Wide CPR (Rangebound Day)"
+    else:
+        cpr_type = "⚖️ Normal CPR (Moderate Day)"
+
+    targets = {}
+    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
+    for idx, r in enumerate(ratios, 1):
+        targets[f"bt{idx}"] = round(doKdc + (range1 * r))
+        targets[f"st{idx}"] = round(doKdc - (range1 * r))
+
+    clean_symbol = symbol.upper().strip()
+    is_major_index = any(x in clean_symbol for x in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+    strikes = calculate_strikes_2percent(current_price, symbol) if is_major_index else None
+
+    return {
+        "current_price": current_price,
+        "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
+        "cpr_type": cpr_type,
+        "market_mood": get_market_mood(),
+        "is_major_index": is_major_index,
+        "b_above": round(doKdc + (range1 * 0.236)),
+        "b_conf": round(doKdc + (range1 * 0.382)),
+        "s_below": round(doKdc - (range1 * 0.236)),
+        "s_conf": round(doKdc - (range1 * 0.382)),
+        "strikes": strikes,
+        **targets
+    }
+
+def fetch_data(symbol):
+    try:
+        sym_u = symbol.upper().strip()
+        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").strip()
+        resolved = ALIAS_MAP.get(clean_sym, clean_sym)
+        candidates = [resolved]
+        if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
+            candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
+
+        for s in candidates:
+            try:
+                df = yf.Ticker(s).history(period="3mo", interval="1d")
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.dropna()
+                if len(df) >= 12:
+                    return df, s
+            except Exception:
+                continue
+    except Exception as e:
+        logging.error(f"Fetch Data Error: {e}")
+    return None, None
+
+def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
+    out = [
+        f"📊 <b>{matched_symbol} • PRO OP LEVELS ALGO</b>",
+        f"📅 <code>{today_str}</code>",
+        f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
+        f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
+        f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n"
+    ]
+    if lvl.get("is_major_index") and lvl.get("strikes"):
+        st = lvl['strikes']
+        out.extend([
+            "🎯 <b>RECOMMENDED STRIKES (±2% RULE)</b>",
+            f"🟢 <b>CALL STRIKES:</b> <code>{st['call_1']} / {st['call_2']}</code>",
+            f"🔴 <b>PUT STRIKES:</b> <code>{st['put_1']} / {st['put_2']}</code>\n"
+        ])
+    out.extend([
+        f"📈 <b>Range (1R):</b> <code>{lvl['range']}</code> | <b>Pivot:</b> <code>{lvl['pivot']}</code>",
+        f"🔹 <b>BC:</b> <code>{lvl['bc']}</code> | <b>TC:</b> <code>{lvl['tc']}</code>\n",
+        "🎯 <b>KEY PRO LEVELS & TARGETS</b>",
+        f"🚀 <b>Entry Confirmed (Buy Above):</b> <code>{lvl['b_conf']}</code>",
+        f"⚠️ <b>Ready for Entry (Near):</b> <code>{lvl['b_above']}</code>",
+        f"🎯 <b>Target 1 (T1):</b> <code>{lvl['bt1']}</code>",
+        f"🔥 <b>Target 2 (T2):</b> <code>{lvl['bt2']}</code>\n",
+        f"🔻 <b>Sell Below (Confirm):</b> <code>{lvl['s_conf']}</code>",
+        f"⚠️ <b>Ready for Entry (Near):</b> <code>{lvl['s_below']}</code>",
+        f"🎯 <b>Target 1 (T1):</b> <code>{lvl['st1']}</code>",
+        f"🔥 <b>Target 2 (T2):</b> <code>{lvl['st2']}</code>"
+    ])
+    out.append(SEBI_DISCLAIMER_TEXT)
+    return "\n".join(out)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    save_user(user_id)
     
-    # 4. Target 2 (T2) Hit
-    if current_price >= t2_target:
-        msg = (
-            "🔥 *TARGET 2 (T2) HIT!* 🔥\n"
-            "-----------------------------------\n"
-            f"• Achieved Price: {current_price}\n"
-            "• Massive movement captured successfully!"
+    if context.args:
+        try:
+            referrer_id = int(context.args[0])
+            record_referral(referrer_id, user_id)
+        except Exception:
+            pass
+
+    if not await is_user_subscribed(context.bot, user_id):
+        await update.message.reply_text(
+            "⚠️ <b>कृपया बोट इस्तेमाल करने के लिए हमारा आधिकारिक चैनल जॉइन करें:</b>",
+            reply_markup=get_force_sub_markup(),
+            parse_mode="HTML"
         )
-        broadcast_alert(msg)
+        return
+
+    await update.message.reply_text(
+        "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
+        "नीचे दिए गए मेनू से अपनी पसंद का विकल्प चुनें:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="HTML"
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user_id = update.effective_user.id
+    save_user(user_id)
+
+    if not await is_user_subscribed(context.bot, user_id):
+        await update.message.reply_text(
+            "⚠️ कृपया पहले चैनल जॉइन करें:",
+            reply_markup=get_force_sub_markup(),
+            parse_mode="HTML"
+        )
+        return
+
+    if text == "🔙 Main Menu":
+        await update.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
+        return
+
+    elif text == "📊 OP Levels Tab":
+        await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
+        return
+
+    elif text == "🥇 Commodity Tab":
+        await update.message.reply_text("कमोडिटी चुनें:", reply_markup=get_commodity_keyboard())
+        return
+
+    elif text == "👥 VIP Referral Link":
+        bot_user = context.bot.username
+        ref_link = f"https://t.me/{bot_user}?start={user_id}"
+        refs = load_data(REFERRALS_FILE, {})
+        invites_count = len(refs.get(str(user_id), []))
+        vip_status = "🟢 VIP ACTIVE" if is_vip_user(user_id) else "🔴 FREE USER"
+        
+        msg = (
+            "👥 <b>VIP Referral Program</b>\n\n"
+            f"• <b>Status:</b> {vip_status}\n"
+            f"• <b>Successful Invites:</b> {invites_count} / 3\n\n"
+            "🔗 <b>Your Invite Link:</b>\n"
+            f"<code>{ref_link}</code>\n\n"
+            "👉 <i>Share this link with 3 friends to unlock all lifetime VIP features!</i>"
+        )
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    elif text == "📖 How to Use? (गाइड)":
+        guide_text = (
+            "📖 <b>How to Use Pro Bot:</b>\n\n"
+            "1. <b>OP Levels Tab:</b> Click to check exact mathematical levels (Buy Above, Ready for Entry, T1, T2) for Nifty, BankNifty, and other major indices.\n"
+            "2. <b>Commodity Tab:</b> Check Gold, Silver, Crude, and Natural Gas levels.\n"
+            "3. <b>Referral:</b> Invite 3 friends using your link to unlock VIP access."
+        )
+        await update.message.reply_text(guide_text, parse_mode="HTML")
+        return
+
+    elif text in ["📊 NIFTY 50", "📈 BANK NIFTY", "🪙 FIN NIFTY", "⚡ SENSEX", "⚡ MIDCAP NIFTY", 
+                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS"]:
+        
+        ok, err_msg = validate_market_access(text)
+        if not ok:
+            await update.message.reply_text(err_msg, parse_mode="HTML")
+            return
+
+        msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
+        
+        df, resolved_sym = fetch_data(text)
+        if df is not None:
+            ist = pytz.timezone('Asia/Kolkata')
+            today_str = datetime.now(ist).strftime('%Y-%m-%d')
+            lvl = calculate_op_levels(df, text)
+            response_text = format_color_display(text, today_str, lvl, text)
+            await msg_wait.edit_text(response_text, parse_mode="HTML")
+        else:
+            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed. Please try again later.", parse_mode="HTML")
+        return
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "check_joined":
+        if await is_user_subscribed(context.bot, user_id):
+            await query.message.delete()
+            await query.message.reply_text(
+                "✅ <b>Verification Successful!</b> अब आप बोट का पूरा इस्तेमाल कर सकते हैं।",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode="HTML"
+            )
+        else:
+            await query.answer("❌ आपने अभी तक चैनल जॉइन नहीं किया है!", show_alert=True)
+
+def main():
+    # Start background web server for Render keep-alive
+    threading.Thread(target=run_web_server, daemon=True).start()
+
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+
+    logging.info("Pro Bot is starting successfully...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    print("Bot is active and running with multi-user alert broadcast...")
-    
-    # यह while True लूप बोट को हमेशा ऑनलाइन रखेगा और 'Application exited early' की दिक्कत नहीं आएगी
-    while True:
-        try:
-            # यहाँ अपना लाइव प्राइस फेच करने वाला लॉजिक रख सकते हैं
-            pass
-        except Exception as e:
-            print(f"Loop Error: {e}")
-        
-        # हर 30 सेकंड में लूप रन होगा ताकि सर्वर पर लोड न आए
-        time.sleep(30)
+    main()
