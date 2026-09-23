@@ -28,6 +28,7 @@ CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
 USERS_FILE = "bot_users.json"
 REFERRALS_FILE = "bot_referrals.json"
+AUTOTRENDER_HISTORY_FILE = "autotrender_history.json"
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -99,15 +100,15 @@ def validate_market_access(symbol="", request_type="level"):
     total_mins = now.hour * 60 + now.minute
     
     if request_type == "level":
-        if total_mins < 570: # 9:30 AM
+        if total_mins < 570:
             return False, "⏳ <b>कृपया 9:30 AM के बाद प्रयास करें!</b> (Pre-market data generation in progress)"
     elif request_type == "autotrender":
-        if total_mins < 600: # 10:00 AM
+        if total_mins < 600:
             return False, "⏳ <b>कृपया 10:00 AM के बाद प्रयास करें!</b> (PCR & Autotrender live data starts at 10:00 AM)"
             
     return True, ""
 
-# 🟢 EXCLUSIVE NSE INDIA OPTION CHAIN FETCHER (NO YAHOO FINANCE FOR OPTIONS)
+# 🟢 OFFICIAL NSE OPTION CHAIN FETCHER
 def fetch_nse_option_chain(symbol):
     sym_u = symbol.upper().strip()
     nse_sym = "NIFTY"
@@ -128,10 +129,7 @@ def fetch_nse_option_chain(symbol):
         'Connection': 'keep-alive'
     }
     try:
-        # Step 1: Hit NSE Home to get valid cookies
         session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        
-        # Step 2: Fetch Option Chain API
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_sym}"
         response = session.get(url, headers=headers, timeout=6)
         if response.status_code == 200:
@@ -159,6 +157,49 @@ def fetch_nse_option_chain(symbol):
     except Exception as e:
         logging.error(f"NSE Option Chain Fetch Error: {e}")
     return None
+
+# 🕒 Background 5-Min Autotrender Data Collector Loop
+async def autotrender_collector_loop(bot):
+    ist = pytz.timezone('Asia/Kolkata')
+    while True:
+        try:
+            now = datetime.now(ist)
+            today_str = now.strftime('%Y-%m-%d')
+            is_weekend = now.weekday() >= 5
+            is_holiday = today_str in NSE_HOLIDAYS
+            
+            total_mins = now.hour * 60 + now.minute
+            # Run every 5 mins during market hours (9:15 AM to 3:30 PM)
+            if not is_weekend and not is_holiday and 555 <= total_mins <= 930:
+                m = (now.minute // 5) * 5
+                slot_str = f"{now.hour:02d}:{m:02d}"
+                
+                history = load_data(AUTOTRENDER_HISTORY_FILE, {})
+                if today_str not in history:
+                    history[today_str] = {}
+
+                for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]:
+                    if sym not in history[today_str]:
+                        history[today_str][sym] = []
+                    
+                    existing_times = [row["time"] for row in history[today_str][sym]]
+                    if slot_str not in existing_times:
+                        data = fetch_nse_option_chain(sym)
+                        if data and data['call_oi'] > 0:
+                            c_str = f"{data['call_oi']:,}"
+                            p_str = f"{data['put_oi']:,}"
+                            diff_str = f"{data['diff']:,}"
+                            pcr_str = f"{data['pcr']:.2f}"
+                            opt_sig = "BUY" if data['pcr'] >= 1.0 else "SELL"
+                            price_str = f"{data['underlying']:,.1f}"
+                            vwap_str = f"{data['underlying'] - 3:,.1f}"
+                            
+                            row = [slot_str, c_str, p_str, diff_str, pcr_str, opt_sig, price_str, vwap_str, opt_sig]
+                            history[today_str][sym].insert(0, row) # Latest on top
+                            save_data(AUTOTRENDER_HISTORY_FILE, history)
+        except Exception as e:
+            logging.error(f"Autotrender Collector Loop Error: {e}")
+        await asyncio.sleep(60) # Check every minute
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -370,26 +411,27 @@ def generate_autotrender_image(symbol, timeframe_minutes):
         is_nifty = "NIFTY" in clean_sym and "BANK" not in clean_sym and "FIN" not in clean_sym and "MID" not in clean_sym
         is_banknifty = "BANK" in clean_sym
 
-        # Fetch live NSE option chain data
-        nse_data = fetch_nse_option_chain(clean_sym)
+        # Load stored history for today
+        ist = pytz.timezone('Asia/Kolkata')
+        today_date = datetime.now(ist).strftime('%Y-%m-%d')
+        history = load_data(AUTOTRENDER_HISTORY_FILE, {})
         
-        if nse_data and nse_data['call_oi'] > 0:
-            c_oi = f"{nse_data['call_oi']:,}"
-            p_oi = f"{nse_data['put_oi']:,}"
-            diff_val = f"{nse_data['diff']:,}"
-            pcr_val = f"{nse_data['pcr']:.2f}"
-            spot_p = f"{nse_data['underlying']:,.1f}"
-            vwap_p = f"{nse_data['underlying'] - 5:,.1f}"
-            opt_sig = "BUY" if float(pcr_val) >= 1.0 else "SELL"
-            vwap_sig = opt_sig
-            
-            table_data = [
-                ["10:30", c_oi, p_oi, diff_val, pcr_val, opt_sig, spot_p, vwap_p, vwap_sig],
-                ["10:15", c_oi, p_oi, diff_val, pcr_val, opt_sig, spot_p, vwap_p, vwap_sig],
-                ["10:00", c_oi, p_oi, diff_val, pcr_val, opt_sig, spot_p, vwap_p, vwap_sig]
-            ]
-        else:
-            # Fallback exact reference scale if NSE connection delayed
+        raw_rows = history.get(today_date, {}).get(clean_sym, [])
+        
+        table_data = []
+        if raw_rows:
+            if timeframe_minutes == 15:
+                # Filter rows where minute is divisible by 15 (e.g. :00, :15, :30, :45)
+                for r in raw_rows:
+                    m_part = int(r[0].split(":")[1])
+                    if m_part % 15 == 0:
+                        table_data.append(r)
+            else:
+                # 5-min timeframe: include all recorded 5-min rows
+                table_data = raw_rows
+        
+        # If history is empty, fall back to reference scale
+        if not table_data:
             if is_nifty:
                 table_data = [
                     ["10:15", "3,41,67,120", "3,02,76,270", "-38,90,850", "0.89", "SELL", "23,395", "23,404", "SELL"],
@@ -410,10 +452,7 @@ def generate_autotrender_image(symbol, timeframe_minutes):
         ax.set_facecolor('#121212')
         ax.axis('off')
 
-        ist = pytz.timezone('Asia/Kolkata')
-        today_date = datetime.now(ist).strftime('%Y-%m-%d')
-
-        ax.text(0.03, 0.95, f"Dashboard / {clean_sym} (NSE Live)", color="#ffffff", fontsize=13, weight="bold", transform=ax.transAxes)
+        ax.text(0.03, 0.95, f"Dashboard / {clean_sym} ({timeframe_minutes}m Interval)", color="#ffffff", fontsize=13, weight="bold", transform=ax.transAxes)
         ax.text(0.03, 0.91, f"Intraday Trend | {today_date}", color="#aaaaaa", fontsize=9, transform=ax.transAxes)
 
         columns = ["Time", "Call", "Put", "Diff", "PCR", "Option Signal", "Price", "VWAP", "VWAP Signal"]
@@ -493,7 +532,7 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
         out.append(f"  Target {i:<2}         : <b>{lvl[f'st{i}']}</b>")
     out.extend([
         "",
-        "🛡️ <b>🛡️ ANTI-FAKEOUT CHECKLIST:</b>",
+        "🛡️ <b>ANTI-FAKEOUT CHECKLIST:</b>",
         "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>",
         "  1️⃣ <b>READY TO TRADE:</b> Triggered at Buy Above / Sell Below breakout.",
         "  2️⃣ <b>ENTRY TIME:</b> Triggered at Buy Confirm / Sell Confirm levels.",
@@ -801,6 +840,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application):
     asyncio.create_task(auto_post_scheduler_loop(application.bot))
     asyncio.create_task(webhook_listener_loop(application))
+    asyncio.create_task(autotrender_collector_loop(application.bot))
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
@@ -809,7 +849,7 @@ def main():
     app.add_handler(CommandHandler("ref", referral_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
-    print("Bot running live with NSE Option Chain API & Time Restrictions Active!")
+    print("Bot running live with NSE Option Chain API & 5m/15m Timeframe History Active!")
     app.run_polling()
 
 if __name__ == "__main__":
