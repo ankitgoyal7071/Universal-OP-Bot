@@ -144,6 +144,7 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
         return False
 
 def get_main_menu_keyboard():
+    # यहाँ से Autotrender Tab हमेशा के लिए हटा दिया गया है
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
@@ -402,7 +403,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
         
-        df, resolved_sym = fetch_test = fetch_data(text) if 'fetch_data' else (None, None)
         df, resolved_sym = fetch_data(text)
         if df is not None:
             ist = pytz.timezone('Asia/Kolkata')
