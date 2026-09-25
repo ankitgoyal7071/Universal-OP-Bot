@@ -1,3 +1,21 @@
+def calculate_op_levels(df, query_sym):
+    try:
+        # डेटाफ्रेम से लेटेस्ट हाई, लो और क्लोज वैल्यू निकालना
+        high = df['High'].iloc[-1]
+        low = df['Low'].iloc[-1]
+        close = df['Close'].iloc[-1]
+        
+        # ट्रेडिंगव्यू Pine Script आधारित लेवल्स की कैलकुलेशन
+        levels = {
+            "Entry": close,
+            "Target 1": close + (high - low) * 0.5,
+            "Target 2": close + (high - low) * 1.0
+        }
+        return levels
+    except Exception as e:
+        print(f"Error in calculate_op_levels: {e}")
+        return None
+
 import os
 import threading
 import asyncio
