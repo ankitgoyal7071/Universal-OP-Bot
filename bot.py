@@ -84,7 +84,6 @@ def is_vip_user(user_id):
 
 def validate_market_access(symbol=""):
     sym_upper = symbol.upper()
-    # Crypto, Forex (XAUUSD) & Global assets trade 24/7, bypass restrictions
     if any(x in sym_upper for x in ["BTC", "ETH", "XAU", "XAG", "USD", "-X", "-USD"]):
         return True, ""
 
@@ -211,16 +210,6 @@ ALIAS_MAP = {
     "SENSEX": "^BSESN",
     "BANKEX": "BSEBK.BO",
     "MCX": "MCX.NS",
-    "MCX GOLD": "GC=F",
-    "MCX SILVER": "SI=F",
-    "CRUDE OIL": "CL=F",
-    "NATURAL GAS": "NG=F",
-    "SPOT GOLD (XAUUSD)": "XAUUSD=X",
-    "XAUUSD": "XAUUSD=X",
-    "SPOT SILVER (XAGUSD)": "XAGUSD=X",
-    "XAGUSD": "XAGUSD=X",
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
     "BTC": "BTC-USD",
     "BITCOIN": "BTC-USD",
     "ETH": "ETH-USD",
@@ -239,9 +228,9 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
-        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
-        [KeyboardButton("💱 Forex Tab"), KeyboardButton("🪙 Crypto Tab")],
+        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🥇 Commodity Tab (MCX)")],
+        [KeyboardButton("💱 Forex & Global Tab"), KeyboardButton("🪙 Crypto Tab")],
+        [KeyboardButton("🏛️ FII/DII Data"), KeyboardButton("📅 Economic Calendar")],
         [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
@@ -255,13 +244,14 @@ def get_op_levels_keyboard():
 def get_commodity_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
-        [KeyboardButton("🛢️ CRUDE OIL"), KeyboardButton("🔥 NATURAL GAS")],
+        [KeyboardButton("🛢️ MCX CRUDE OIL"), KeyboardButton("🔥 MCX NATURAL GAS")],
         [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
 
 def get_forex_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💱 SPOT GOLD (XAUUSD)"), KeyboardButton("💱 SPOT SILVER (XAGUSD)")],
+        [KeyboardButton("💱 GLOBAL CRUDE OIL"), KeyboardButton("💱 GLOBAL NATURAL GAS")],
         [KeyboardButton("💶 EUR/USD"), KeyboardButton("💷 GBP/USD")],
         [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
@@ -372,25 +362,32 @@ def fetch_data(symbol):
         sym_u = symbol.upper().strip()
         clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").replace("💶", "").replace("💷", "").strip()
         
-        # स्मार्ट मैपिंग
+        is_mcx = "MCX" in clean_sym
+        
+        # तय करें कि कौन सा टिकर फेच करना है
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
-            clean_sym = "XAUUSD"
+            resolved = "XAUUSD=X"
         elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
-            clean_sym = "XAGUSD"
-        elif "MCX GOLD" in clean_sym or clean_sym == "GOLD":
-            clean_sym = "MCX GOLD"
-        elif "MCX SILVER" in clean_sym or clean_sym == "SILVER":
-            clean_sym = "MCX SILVER"
-        elif "CRUDE" in clean_sym:
-            clean_sym = "CRUDE OIL"
-        elif "NATURAL" in clean_sym:
-            clean_sym = "NATURAL GAS"
+            resolved = "XAGUSD=X"
+        elif "MCX GOLD" in clean_sym:
+            resolved = "GC=F"  # ग्लोबल गोल्ड से भारतीय MCX INR में कन्वर्ट होगा
+        elif "MCX SILVER" in clean_sym:
+            resolved = "SI=F"  # ग्लोबल सिल्वर से भारतीय MCX INR में कन्वर्ट होगा
+        elif "MCX CRUDE" in clean_sym or clean_sym == "CRUDE OIL":
+            resolved = "CL=F"  # क्रूड ऑयल (MCX के लिए INR कन्वर्ट होगा)
+        elif "MCX NATURAL" in clean_sym or clean_sym == "NATURAL GAS":
+            resolved = "NG=F"  # नेचुरल गैस (MCX के लिए INR कन्वर्ट होगा)
+        elif "GLOBAL CRUDE" in clean_sym:
+            resolved = "CL=F"
+        elif "GLOBAL NATURAL" in clean_sym:
+            resolved = "NG=F"
         elif "BITCOIN" in clean_sym or clean_sym == "BTC":
-            clean_sym = "BTC"
+            resolved = "BTC-USD"
         elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
-            clean_sym = "ETH"
+            resolved = "ETH-USD"
+        else:
+            resolved = ALIAS_MAP.get(clean_sym, clean_sym)
 
-        resolved = ALIAS_MAP.get(clean_sym, clean_sym)
         candidates = [resolved]
         if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
             candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD", f"{resolved}=X"])
@@ -402,6 +399,27 @@ def fetch_data(symbol):
                     df.columns = df.columns.get_level_values(0)
                 df = df.dropna()
                 if len(df) >= 12:
+                    # अगर यह MCX कमोडिटी है, तो लाइव USD/INR रेट से मल्टीप्लाई करके भारतीय मूल्य (INR) में बदलें
+                    if is_mcx:
+                        try:
+                            usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
+                            if not usdinr_df.empty:
+                                usdinr_rate = float(usdinr_df['Close'].iloc[-1])
+                                if "GOLD" in clean_sym:
+                                    # 1 troy oz = 31.1035g, MCX Gold 10 gram contract calculation
+                                    multiplier = (usdinr_rate / 31.1035) * 10
+                                elif "SILVER" in clean_sym:
+                                    # 1 troy oz = 31.1035g, MCX Silver 1 kg (1000g) contract calculation
+                                    multiplier = (usdinr_rate / 31.1035) * 1000
+                                else:
+                                    multiplier = usdinr_rate
+                                
+                                for col in ['Open', 'High', 'Low', 'Close']:
+                                    if col in df.columns:
+                                        df[col] = df[col] * multiplier
+                        except Exception as ex:
+                            logging.error(f"MCX Currency Conversion Error: {ex}")
+                    
                     return df, s
             except Exception:
                 continue
@@ -487,12 +505,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
         return
 
-    elif text == "🥇 Commodity Tab":
-        await update.message.reply_text("कमोडिटी (MCX India) चुनें:", reply_markup=get_commodity_keyboard())
+    elif text == "🥇 Commodity Tab (MCX)":
+        await update.message.reply_text("भारतीय कमोडिटी (MCX India - INR) चुनें:", reply_markup=get_commodity_keyboard())
         return
 
-    elif text == "💱 Forex Tab":
-        await update.message.reply_text("फॉरेक्स & ग्लोबल (XAUUSD / Spot) चुनें:", reply_markup=get_forex_keyboard())
+    elif text == "💱 Forex & Global Tab":
+        await update.message.reply_text("फॉरेक्स & ग्लोबल मार्केट्स (USD) चुनें:", reply_markup=get_forex_keyboard())
         return
 
     elif text == "🪙 Crypto Tab":
@@ -532,16 +550,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
             "1. <b>OP Levels / Stocks:</b> Nifty या कोई भी स्टॉक (जैसे RELIANCE) सीधे टाइप करें।\n"
-            "2. <b>🥇 Commodity Tab:</b> भारतीय MCX Gold, Silver, Crude, Natural Gas.\n"
-            "3. <b>💱 Forex Tab:</b> ग्लोबल Spot Gold (XAUUSD), Spot Silver (XAGUSD), EUR/USD.\n"
+            "2. <b>🥇 Commodity Tab:</b> भारतीय MCX Gold, Silver, Crude, Natural Gas (INR मूल्य)।\n"
+            "3. <b>💱 Forex & Global Tab:</b> ग्लोबल Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude/NG।\n"
             "4. <b>🪙 Crypto Tab:</b> Bitcoin (BTC) और Ethereum (ETH)।"
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
 
     elif text in ["📊 NIFTY 50", "📈 BANK NIFTY", "🪙 FIN NIFTY", "⚡ SENSEX", "⚡ MIDCAP NIFTY", 
-                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS",
-                  "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💶 EUR/USD", "💷 GBP/USD",
+                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ MCX CRUDE OIL", "🔥 MCX NATURAL GAS",
+                  "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💱 GLOBAL CRUDE OIL", "💱 GLOBAL NATURAL GAS", "💶 EUR/USD", "💷 GBP/USD",
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
         query_sym = text
