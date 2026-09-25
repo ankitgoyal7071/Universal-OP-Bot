@@ -1,20 +1,29 @@
 def calculate_op_levels(df, query_sym):
     try:
-        # डेटाफ्रेम से लेटेस्ट हाई, लो और क्लोज वैल्यू निकालना
-        high = df['High'].iloc[-1]
-        low = df['Low'].iloc[-1]
-        close = df['Close'].iloc[-1]
+        print(f"DataFrame Columns: {df.columns}") # रेंडर लॉग्स में चेक करने के लिए
         
-        # ट्रेडिंगव्यू Pine Script आधारित लेवल्स की कैलकुलेशन
+        # कॉलम के नाम चाहे छोटे हों या बड़े, यह अपने आप ढूँढ लेगा
+        cols = {str(col).lower(): col for col in df.columns}
+        h_col = cols.get('high', 'High')
+        l_col = cols.get('low', 'Low')
+        c_col = cols.get('close', 'Close')
+        
+        high = float(df[h_col].iloc[-1])
+        low = float(df[l_col].iloc[-1])
+        close = float(df[c_col].iloc[-1])
+        
+        # लेवल्स की डिक्शनरी
         levels = {
             "Entry": close,
             "Target 1": close + (high - low) * 0.5,
             "Target 2": close + (high - low) * 1.0
         }
+        print(f"Calculated Levels: {levels}")
         return levels
     except Exception as e:
-        print(f"Error in calculate_op_levels: {e}")
+        print(f"Detailed Error in calculate_op_levels: {e}")
         return None
+
 
 import os
 import threading
