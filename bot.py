@@ -22,7 +22,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN environment variable not set!")
 
-GOLD_API_KEY = os.environ.get("GOLD_API_KEY", "")
+GOLD_API_KEY = os.environ.get("GOLD_API_KEY", "").strip()
 
 ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
@@ -386,7 +386,6 @@ def fetch_data(symbol):
                 df = df.dropna()
                 
                 if len(df) >= 12:
-                    # GoldAPI से गोल्ड और सिल्वर दोनों के लिए लाइव प्राइस लेकर डेटा को स्केल करना
                     if is_gold or is_silver:
                         api_symbol = "XAU" if is_gold else "XAG"
                         try:
@@ -397,6 +396,7 @@ def fetch_data(symbol):
                                     "Content-Type": "application/json"
                                 }
                                 resp = requests.get(url, headers=headers, timeout=5)
+                                logging.info(f"GoldAPI Response for {api_symbol}: Status {resp.status_code}, Body: {resp.text}")
                                 if resp.status_code == 200:
                                     api_data = resp.json()
                                     live_price = float(api_data.get("price", 0))
@@ -407,6 +407,10 @@ def fetch_data(symbol):
                                             for col in ['Open', 'High', 'Low', 'Close']:
                                                 if col in df.columns:
                                                     df[col] = df[col] * scale_ratio
+                                else:
+                                    logging.error(f"GoldAPI Failed! Status: {resp.status_code}, Response: {resp.text}")
+                            else:
+                                logging.warning("GOLD_API_KEY is missing or empty in environment variables!")
                         except Exception as api_err:
                             logging.error(f"GoldAPI Scaling Error for {api_symbol}: {api_err}")
 
