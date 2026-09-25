@@ -13,6 +13,7 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 import pytz
+from tvDatafeed import TvDatafeed, Interval
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
@@ -37,6 +38,13 @@ PERFORMANCE_FILE = "bot_performance_logs.json"
 START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
+
+# Initialize TradingView Datafeed (Anonymously)
+try:
+    tv = TvDatafeed()
+except Exception as e:
+    logging.error(f"TradingView Init Error: {e}")
+    tv = None
 
 # Main tracked assets with Leverage Multipliers (Nifty/BankNifty = 1x, Gold/Crypto/Crude = 50x)
 TRACKED_ASSETS = {
@@ -89,7 +97,6 @@ def load_performance_data():
         except Exception:
             pass
             
-    # पिछले 7 दिनों का रियलिस्टिक नेट प्रॉफिट डेटा (लॉस माइनस करने के बाद)
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
     
@@ -314,18 +321,16 @@ def run_web_server():
     server.serve_forever()
 
 ALIAS_MAP = {
-    "NIFTY": "^NSEI",
-    "NIFTY 50": "^NSEI",
-    "NIFTY50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-    "BANK NIFTY": "^NSEBANK",
-    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-    "FIN NIFTY": "NIFTY_FIN_SERVICE.NS",
-    "MIDCPNIFTY": "^NSEMDCP50",
-    "MIDCAP NIFTY": "^NSEMDCP50",
-    "SENSEX": "^BSESN",
-    "BANKEX": "BSEBK.BO",
-    "MCX": "MCX.NS",
+    "NIFTY": "NIFTY",
+    "NIFTY 50": "NIFTY",
+    "NIFTY50": "NIFTY",
+    "BANKNIFTY": "BANKNIFTY",
+    "BANK NIFTY": "BANKNIFTY",
+    "FINNIFTY": "FINNIFTY",
+    "FIN NIFTY": "FINNIFTY",
+    "MIDCPNIFTY": "MIDCPNIFTY",
+    "MIDCAP NIFTY": "MIDCPNIFTY",
+    "SENSEX": "SENSEX",
     "BTC": "BTC-USD",
     "BITCOIN": "BTC-USD",
     "ETH": "ETH-USD",
@@ -473,6 +478,19 @@ def fetch_data(symbol):
         is_gold = "XAU" in clean_sym or "SPOT GOLD" in clean_sym
         is_silver = "XAG" in clean_sym or "SPOT SILVER" in clean_sym
         
+        # Indian Indices from TradingView directly
+        if tv and any(idx in clean_sym for idx in ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"]):
+            tv_sym = "NIFTY" if "NIFTY" in clean_sym and "BANK" not in clean_sym and "FIN" not in clean_sym and "MID" not in clean_sym else ("BANKNIFTY" if "BANK" in clean_sym else ("FINNIFTY" if "FIN" in clean_sym else ("MIDCPNIFTY" if "MID" in clean_sym else "SENSEX")))
+            exchange = "BSE" if "SENSEX" in clean_sym else "NSE"
+            
+            df = tv.get_hist(symbol=tv_sym, exchange=exchange, interval=Interval.in_daily, n_bars=100)
+            if df is not None and not df.empty:
+                df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+                df = df.dropna()
+                if len(df) >= 12:
+                    return df, tv_sym
+                    
+        # Fallback / Global Assets via yfinance
         if is_gold:
             resolved = "GC=F"
         elif is_silver:
@@ -978,7 +996,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Help & Support Flow Handler
     if text == "🆘 Help & Support":
         WAITING_FOR_HELP.add(user.id)
         await update.message.reply_text(
@@ -1078,7 +1095,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(err_msg, parse_mode="HTML")
             return
 
-        msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
+        msg_wait = await update.message.reply_text("⏳ <i>Fetching TradingView live levels...</i>", parse_mode="HTML")
         
         df, resolved_sym = fetch_data(query_sym)
         if df is not None:
@@ -1088,7 +1105,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(text, today_str, lvl, query_sym)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
+            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed from TradingView.", parse_mode="HTML")
         return
 
     else:
@@ -1100,7 +1117,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(err_msg, parse_mode="HTML")
             return
 
-        msg_wait = await update.message.reply_text(f"⏳ <i>Fetching algorithm levels for {symbol_input.upper()}...</i>", parse_mode="HTML")
+        msg_wait = await update.message.reply_text(f"⏳ <i>Fetching levels for {symbol_input.upper()}...</i>", parse_mode="HTML")
         
         df, resolved_sym = fetch_data(symbol_input)
         if df is not None:
@@ -1110,7 +1127,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await update.message.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
+            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1149,7 +1166,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with 7-Day Net Profit Seed Data...")
+    logging.info("Pro Bot started successfully with TradingView Datafeed integration...")
     app.run_polling()
 
 if __name__ == "__main__":
