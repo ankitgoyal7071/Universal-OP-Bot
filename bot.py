@@ -361,7 +361,6 @@ def fetch_data(symbol):
         sym_u = symbol.upper().strip()
         clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
         
-        # यह जांचें कि क्या यह भारतीय MCX कमोडिटी है (जिसे INR और भारतीय यूनिट में बदलना है)
         is_mcx = "MCX" in clean_sym
         
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
@@ -398,18 +397,19 @@ def fetch_data(symbol):
                     df.columns = df.columns.get_level_values(0)
                 df = df.dropna()
                 if len(df) >= 12:
-                    # यदि यह MCX है, तो USD को INR में बदलें और Gold/Silver के लिए सही कॉन्ट्रैक्ट यूनिट लगाएं
                     if is_mcx:
                         try:
                             usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
                             if not usdinr_df.empty:
                                 usdinr_rate = float(usdinr_df['Close'].iloc[-1])
+                                # इम्पोर्ट ड्यूटी और जीएसटी (लगभग 12.5% प्रीमियम factor) को शामिल करके वास्तविक MCX भाव मैच किया गया है
+                                duty_factor = 1.125 
                                 if "GOLD" in clean_sym:
-                                    multiplier = (usdinr_rate / 31.1035) * 10  # 10 ग्राम MCX गोल्ड प्राइस
+                                    multiplier = (usdinr_rate / 31.1035) * 10 * duty_factor
                                 elif "SILVER" in clean_sym:
-                                    multiplier = (usdinr_rate / 31.1035) * 1000 # 1 किलो MCX सिल्वर प्राइस
+                                    multiplier = (usdinr_rate / 31.1035) * 1000 * duty_factor
                                 else:
-                                    multiplier = usdinr_rate # Crude / Natural Gas INR conversion
+                                    multiplier = usdinr_rate * duty_factor
                                 
                                 for col in ['Open', 'High', 'Low', 'Close']:
                                     if col in df.columns:
@@ -546,8 +546,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>🥇 Commodity Tab (MCX):</b> MCX Gold (10g), MCX Silver (1kg), MCX Crude & Natural Gas (INR भाव).\n"
-            "2. <b>💱 Forex & Global Tab:</b> Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude & Natural Gas (USD भाव).\n"
+            "1. <b>🥇 Commodity Tab (MCX):</b> MCX Gold (10g), Silver (1kg), Crude & Natural Gas (भारतीय वास्तविक मूल्य).\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude & Natural Gas (डॉलर भाव).\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
