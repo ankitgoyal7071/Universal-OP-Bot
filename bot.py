@@ -30,6 +30,8 @@ CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
 
 USERS_FILE = "bot_users.json"
 REFERRALS_FILE = "bot_referrals.json"
+BLOCKED_FILE = "bot_blocked.json"
+VIP_FILE = "bot_manual_vip.json"
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -80,9 +82,16 @@ def record_referral(referrer_id, new_user_id):
 def is_vip_user(user_id):
     if user_id == ADMIN_ID:
         return True
+    manual_vips = load_data(VIP_FILE, [])
+    if user_id in manual_vips:
+        return True
     refs = load_data(REFERRALS_FILE, {})
     user_invites = refs.get(str(user_id), [])
     return len(user_invites) >= 3
+
+def is_user_blocked(user_id):
+    blocked = load_data(BLOCKED_FILE, [])
+    return user_id in blocked
 
 def validate_market_access(symbol=""):
     sym_upper = symbol.upper()
@@ -98,7 +107,7 @@ def validate_market_access(symbol=""):
     
     total_mins = now.hour * 60 + now.minute
     if total_mins < 570:
-        return False, "⏳ <b>कृपया 9:30 AM के बाद प्रयास करें!</b> (Pre-market data generation in progress)"
+        return False, "⏳ <b>कृपया 9:30 AM के बाद प्रयास करें!</b>"
             
     return True, ""
 
@@ -106,7 +115,7 @@ def fetch_fii_dii_data():
     try:
         session = requests.Session()
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.nseindia.com',
         }
@@ -396,7 +405,6 @@ def fetch_data(symbol):
                                     "Content-Type": "application/json"
                                 }
                                 resp = requests.get(url, headers=headers, timeout=5)
-                                logging.info(f"GoldAPI Response for {api_symbol}: Status {resp.status_code}, Body: {resp.text}")
                                 if resp.status_code == 200:
                                     api_data = resp.json()
                                     live_price = float(api_data.get("price", 0))
@@ -407,12 +415,8 @@ def fetch_data(symbol):
                                             for col in ['Open', 'High', 'Low', 'Close']:
                                                 if col in df.columns:
                                                     df[col] = df[col] * scale_ratio
-                                else:
-                                    logging.error(f"GoldAPI Failed! Status: {resp.status_code}, Response: {resp.text}")
-                            else:
-                                logging.warning("GOLD_API_KEY is missing or empty in environment variables!")
                         except Exception as api_err:
-                            logging.error(f"GoldAPI Scaling Error for {api_symbol}: {api_err}")
+                            logging.error(f"GoldAPI Error: {api_err}")
 
                     return df, s
             except Exception:
@@ -454,6 +458,9 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if is_user_blocked(user_id):
+        return
+
     save_user(user_id)
     
     if context.args:
@@ -478,9 +485,158 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# ================= ADMIN COMMANDS =================
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    users = load_data(USERS_FILE, [])
+    refs = load_data(REFERRALS_FILE, {})
+    total_refs = sum(len(v) for v in refs.values())
+    
+    await update.message.reply_text(
+        "📊 <b>BOT ADMIN STATISTICS</b>\n"
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        f"• Total Unique Users: <code>{len(users)}</code>\n"
+        f"• Total Referrals Made: <code>{total_refs}</code>",
+        parse_mode="HTML"
+    )
+
+async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if os.path.exists(USERS_FILE):
+        await update.message.document(document=open(USERS_FILE, 'rb'), caption="📄 All Bot Users List")
+    else:
+        await update.message.reply_text("ℹ️ अभी कोई यूजर डेटा उपलब्ध नहीं है।")
+
+async def admin_add_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("⚠️ इस्तेमाल: `/addvip <user_id>`", parse_mode="HTML")
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        vips = load_data(VIP_FILE, [])
+        if target_id not in vips:
+            vips.append(target_id)
+            save_data(VIP_FILE, vips)
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> successfully added to VIP list!", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def admin_remove_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("⚠️ इस्तेमाल: `/removevip <user_id>`", parse_mode="HTML")
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        vips = load_data(VIP_FILE, [])
+        if target_id in vips:
+            vips.remove(target_id)
+            save_data(VIP_FILE, vips)
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> removed from VIP list!", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def admin_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("⚠️ इस्तेमाल: `/block <user_id>`", parse_mode="HTML")
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        blocked = load_data(BLOCKED_FILE, [])
+        if target_id not in blocked:
+            blocked.append(target_id)
+            save_data(BLOCKED_FILE, blocked)
+        await update.message.reply_text(f"🚫 User <code>{target_id}</code> has been blocked.", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def admin_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("⚠️ इस्तेमाल: `/unblock <user_id>`", parse_mode="HTML")
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        blocked = load_data(BLOCKED_FILE, [])
+        if target_id in blocked:
+            blocked.remove(target_id)
+            save_data(BLOCKED_FILE, blocked)
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> has been unblocked.", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ <b>गलत फॉर्मेट!</b>\n"
+            "सही इस्तेमाल: <code>/broadcast आपका मैसेज यहाँ लिखें</code>",
+            parse_mode="HTML"
+        )
+        return
+        
+    broadcast_text = " ".join(context.args)
+    users = load_data(USERS_FILE, [])
+    
+    status_msg = await update.message.reply_text(f"⏳ Broadcast starting to {len(users)} users...")
+    
+    success, failed = 0, 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=broadcast_text, parse_mode="HTML")
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+            
+    await status_msg.edit_text(
+        "✅ <b>Broadcast Completed Successfully!</b>\n"
+        f"• Successful Sent: <code>{success}</code>\n"
+        f"• Failed: <code>{failed}</code>",
+        parse_mode="HTML"
+    )
+# ==================================================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if is_user_blocked(user_id):
+        return
+
+    text = update.message.text
     save_user(user_id)
 
     if not await is_user_subscribed(context.bot, user_id):
@@ -500,7 +656,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "💱 Forex & Global Tab":
-        await update.message.reply_text("फॉरेक्स & ग्लोबल मार्केट्स (USD) चुनें:", reply_markup=get_forex_keyboard())
+        await update.message.reply_text("फॉरेक्स & ग्लोबल मार्केट्स चुनें:", reply_markup=get_forex_keyboard())
         return
 
     elif text == "🪙 Crypto Tab":
@@ -540,7 +696,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
             "1. <b>📊 OP Levels Tab:</b> Nifty, BankNifty, Finnifty, Sensex, MidcpNifty.\n"
-            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver (via GoldAPI live scaling), Crude & Natural Gas.\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver, Crude & Natural Gas.\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
@@ -566,7 +722,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(text, today_str, lvl, query_sym)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed. Please try again later.", parse_mode="HTML")
+            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
         return
 
     else:
@@ -586,7 +742,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल टाइप करें।", parse_mode="HTML")
+            await msg_wait.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -611,10 +767,17 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", admin_stats))
+    app.add_handler(CommandHandler("users", admin_users_list))
+    app.add_handler(CommandHandler("addvip", admin_add_vip))
+    app.add_handler(CommandHandler("removevip", admin_remove_vip))
+    app.add_handler(CommandHandler("block", admin_block))
+    app.add_handler(CommandHandler("unblock", admin_unblock))
+    app.add_handler(CommandHandler("broadcast", admin_broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully...")
+    logging.info("Pro Bot is starting successfully with Full Admin & Force-Sub features...")
     app.run_polling()
 
 if __name__ == "__main__":
