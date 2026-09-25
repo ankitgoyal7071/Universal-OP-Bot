@@ -22,6 +22,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN environment variable not set!")
 
+GOLD_API_KEY = os.environ.get("GOLD_API_KEY", "")
+
 ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
@@ -181,7 +183,7 @@ def get_economic_calendar():
         "💼 <b>4. US Non-Farm Payrolls (NFP):</b>\n"
         "• <i>Impact:</i> Dollar Index (DXY), Gold & Silver\n\n"
         "🛢️ <b>5. US EIA Crude Oil Inventories:</b>\n"
-        "• <i>Impact:</i> Global Crude Oil, Energy Stocks"
+        "• <i>Impact:</i> MCX Crude Oil, Energy Stocks"
         + SEBI_DISCLAIMER_TEXT
     )
 
@@ -354,11 +356,13 @@ def fetch_data(symbol):
         sym_u = symbol.upper().strip()
         clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").strip()
         
-        # ग्लोबल गोल्ड और सिल्वर के लिए सटीक और मजबूत सिंबल मैपिंग
-        if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
-            resolved = "GC=F" # कॉमेक्स गोल्ड फ्यूचर (जो XAUUSD का सबसे सटीक और स्टेबल डेटा देता है)
-        elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
-            resolved = "SI=F" # कॉमेक्स सिल्वर फ्यूचर
+        is_gold = "XAU" in clean_sym or "SPOT GOLD" in clean_sym
+        is_silver = "XAG" in clean_sym or "SPOT SILVER" in clean_sym
+        
+        if is_gold:
+            resolved = "GC=F"
+        elif is_silver:
+            resolved = "SI=F"
         elif "GLOBAL CRUDE" in clean_sym:
             resolved = "CL=F"
         elif "GLOBAL NATURAL" in clean_sym:
@@ -382,6 +386,32 @@ def fetch_data(symbol):
                 df = df.dropna()
                 
                 if len(df) >= 12:
+                    # GoldAPI से लाइव प्राइस लाकर पूरे हिस्टोरिकल डेटा को स्केल (Scale) करना
+                    # ताकि वोलेटिलिटी और CPR लेवल्स बिल्कुल GoldAPI के लाइव प्राइस पर आधारित हों
+                    if is_gold or is_silver:
+                        api_symbol = "XAU" if is_gold else "XAG"
+                        try:
+                            if GOLD_API_KEY:
+                                url = f"https://www.goldapi.io/api/price/{api_symbol}/USD"
+                                headers = {
+                                    "x-access-token": GOLD_API_KEY,
+                                    "Content-Type": "application/json"
+                                }
+                                resp = requests.get(url, headers=headers, timeout=5)
+                                if resp.status_code == 200:
+                                    api_data = resp.json()
+                                    live_price = float(api_data.get("price", 0))
+                                    if live_price > 0:
+                                        old_latest_close = float(df['Close'].iloc[-1])
+                                        if old_latest_close > 0:
+                                            scale_ratio = live_price / old_latest_close
+                                            # पूरे हिस्टोरिकल डेटा को गोल्ड एपीआई के लाइव प्राइस के अनुपात में स्केल करना
+                                            for col in ['Open', 'High', 'Low', 'Close']:
+                                                if col in df.columns:
+                                                    df[col] = df[col] * scale_ratio
+                        except Exception as api_err:
+                            logging.error(f"GoldAPI Scaling Error: {api_err}")
+
                     return df, s
             except Exception:
                 continue
@@ -508,7 +538,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
             "1. <b>📊 OP Levels Tab:</b> Nifty, BankNifty, Finnifty, Sensex, MidcpNifty.\n"
-            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver, Global Crude & Natural Gas.\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver (via GoldAPI live scaling).\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
