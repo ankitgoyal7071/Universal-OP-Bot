@@ -9,18 +9,19 @@ def calculate_op_levels(df, query_sym):
         low = float(df[l_col].iloc[-1])
         close = float(df[c_col].iloc[-1])
         
-        # सभी जरूरी कीज़ (Keys) यहाँ जोड़ दी गई हैं ताकि KeyError न आए
         levels = {
             "current_price": close,
             "Entry": close,
             "Target 1": close + (high - low) * 0.5,
-            "Target 2": close + (high - low) * 1.0
+            "Target 2": close + (high - low) * 1.0,
+            "market_mood": "Neutral"
         }
         return levels
     except Exception as e:
         traceback.print_exc()
         print(f"Error in calculate_op_levels: {e}")
         return None
+
 
 
 
