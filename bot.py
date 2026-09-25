@@ -511,7 +511,8 @@ async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if os.path.exists(USERS_FILE):
-        await update.message.document(document=open(USERS_FILE, 'rb'), caption="📄 All Bot Users List")
+        with open(USERS_FILE, 'rb') as f:
+            await update.message.reply_document(document=f, caption="📄 All Bot Users List")
     else:
         await update.message.reply_text("ℹ️ अभी कोई यूजर डेटा उपलब्ध नहीं है।")
 
