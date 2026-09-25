@@ -39,14 +39,13 @@ START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
 
-# Initialize TradingView Datafeed (Anonymously)
+# Initialize TradingView Datafeed
 try:
     tv = TvDatafeed()
 except Exception as e:
     logging.error(f"TradingView Init Error: {e}")
     tv = None
 
-# Main tracked assets with Leverage Multipliers (Nifty/BankNifty = 1x, Gold/Crypto/Crude = 50x)
 TRACKED_ASSETS = {
     "NIFTY 50": {"leverage": 1, "unit": "Pts"},
     "BANKNIFTY": {"leverage": 1, "unit": "Pts"},
@@ -408,68 +407,6 @@ def get_market_mood():
         pass
     return "14.20 (Balanced Swing Mode 🟢)"
 
-def calculate_op_levels(df, symbol):
-    current_price = round(float(df['Close'].iloc[-1]), 2)
-    dop = float(df['Open'].iloc[-1])
-    dc = float(df['Close'].iloc[-2])
-    dhigh = float(df['High'].iloc[-2])
-    dlow = float(df['Low'].iloc[-2])
-
-    closes = df['Close'].iloc[-12:-1].values
-    log_returns = [np.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
-    avg_logg0 = sum(log_returns) / 10.0
-    sq_sum0 = sum([x**2 for x in log_returns]) / 10.0
-    volatility0 = np.sqrt(max(0, sq_sum0 - (avg_logg0**2)))
-    range11 = round(dc * volatility0)
-
-    doKdc = dop if abs(dop - dc) > (0.382 * range11) else dc
-    logg = np.log(doKdc / closes[-2])
-    adjusted_logs = [logg] + log_returns[:-1]
-    avg_logg = sum(adjusted_logs) / 10.0
-    sq_sum = sum([x**2 for x in adjusted_logs]) / 10.0
-    volatility = np.sqrt(max(0, sq_sum - (avg_logg**2)))
-    range1 = round(doKdc * volatility)
-
-    pivot = round((dhigh + dlow + dc) / 3)
-    bc_raw = round((dhigh + dlow) / 2)
-    tc_raw = round((pivot - bc_raw) + pivot)
-    
-    bc = min(bc_raw, tc_raw)
-    tc = max(bc_raw, tc_raw)
-
-    cpr_width = abs(tc - bc)
-    cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
-    if cpr_percent < 0.25:
-        cpr_type = "⚡ Narrow CPR (Trending Day Expected)"
-    elif cpr_percent > 0.65:
-        cpr_type = "⚠️ Wide CPR (Rangebound Day)"
-    else:
-        cpr_type = "⚖️ Normal CPR (Moderate Day)"
-
-    targets = {}
-    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
-    for idx, r in enumerate(ratios, 1):
-        targets[f"bt{idx}"] = round(doKdc + (range1 * r), 2)
-        targets[f"st{idx}"] = round(doKdc - (range1 * r), 2)
-
-    clean_symbol = symbol.upper().strip()
-    is_major_index = any(x in clean_symbol for x in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
-    strikes = calculate_strikes_2percent(current_price, symbol) if is_major_index else None
-
-    return {
-        "current_price": current_price,
-        "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
-        "cpr_type": cpr_type,
-        "market_mood": get_market_mood(),
-        "is_major_index": is_major_index,
-        "b_above": round(doKdc + (range1 * 0.236), 2),
-        "b_conf": round(doKdc + (range1 * 0.382), 2),
-        "s_below": round(doKdc - (range1 * 0.236), 2),
-        "s_conf": round(doKdc - (range1 * 0.382), 2),
-        "strikes": strikes,
-        **targets
-    }
-
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
@@ -478,7 +415,6 @@ def fetch_data(symbol):
         is_gold = "XAU" in clean_sym or "SPOT GOLD" in clean_sym
         is_silver = "XAG" in clean_sym or "SPOT SILVER" in clean_sym
         
-        # Indian Indices from TradingView directly
         if tv and any(idx in clean_sym for idx in ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"]):
             tv_sym = "NIFTY" if "NIFTY" in clean_sym and "BANK" not in clean_sym and "FIN" not in clean_sym and "MID" not in clean_sym else ("BANKNIFTY" if "BANK" in clean_sym else ("FINNIFTY" if "FIN" in clean_sym else ("MIDCPNIFTY" if "MID" in clean_sym else "SENSEX")))
             exchange = "BSE" if "SENSEX" in clean_sym else "NSE"
@@ -490,7 +426,6 @@ def fetch_data(symbol):
                 if len(df) >= 12:
                     return df, tv_sym
                     
-        # Fallback / Global Assets via yfinance
         if is_gold:
             resolved = "GC=F"
         elif is_silver:
@@ -636,7 +571,6 @@ def get_performance_report():
     msg.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(msg)
 
-# Background Target Monitoring System with 50x Leverage Profit Logging
 notified_today = set()
 
 def start_target_monitor(application):
@@ -761,7 +695,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-# ================= ADMIN COMMANDS =================
 async def admin_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -978,7 +911,6 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Failed: <code>{failed}</code>",
         parse_mode="HTML"
     )
-# ==================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1095,7 +1027,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(err_msg, parse_mode="HTML")
             return
 
-        msg_wait = await update.message.reply_text("⏳ <i>Fetching TradingView live levels...</i>", parse_mode="HTML")
+        msg_wait = await update.message.reply_text("⏳ <i>Calculating exact TradingView Pine Script levels...</i>", parse_mode="HTML")
         
         df, resolved_sym = fetch_data(query_sym)
         if df is not None:
@@ -1105,7 +1037,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(text, today_str, lvl, query_sym)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed from TradingView.", parse_mode="HTML")
+            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
         return
 
     else:
@@ -1127,7 +1059,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
+            await msg_wait.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1166,7 +1098,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot started successfully with TradingView Datafeed integration...")
+    logging.info("Pro Bot started successfully with exact Pine Script math...")
     app.run_polling()
 
 if __name__ == "__main__":
