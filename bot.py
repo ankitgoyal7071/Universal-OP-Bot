@@ -11,7 +11,7 @@ import logging
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -60,15 +60,40 @@ def load_data(file_path, default_val):
 def save_data(file_path, data):
     try:
         with open(file_path, "w") as f:
-            json.dump(data, f)
+            json.dump(data, f, indent=4)
     except Exception as e:
         logging.error(f"Error saving {file_path}: {e}")
 
-def save_user(user_id):
-    users = set(load_data(USERS_FILE, []))
-    if user_id not in users:
-        users.add(user_id)
-        save_data(USERS_FILE, list(users))
+def save_user(user):
+    users = load_data(USERS_FILE, [])
+    user_id = user.id
+    full_name = user.full_name or "Unknown"
+    username = f"@{user.username}" if user.username else "No Username"
+    
+    ist = pytz.timezone('Asia/Kolkata')
+    current_time = datetime.now(ist).isoformat()
+    
+    user_exists = False
+    for u in users:
+        if isinstance(u, dict) and u.get("id") == user_id:
+            u["name"] = full_name
+            u["username"] = username
+            u["last_active"] = current_time
+            user_exists = True
+            break
+        elif not isinstance(u, dict) and u == user_id:
+            # Handle legacy format
+            user_exists = True
+            
+    if not user_exists:
+        users.append({
+            "id": user_id, 
+            "name": full_name, 
+            "username": username, 
+            "last_active": current_time
+        })
+        
+    save_data(USERS_FILE, users)
 
 def record_referral(referrer_id, new_user_id):
     refs = load_data(REFERRALS_FILE, {})
@@ -457,20 +482,20 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     return "\n".join(out)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if is_user_blocked(user_id):
+    user = update.effective_user
+    if is_user_blocked(user.id):
         return
 
-    save_user(user_id)
+    save_user(user)
     
     if context.args:
         try:
             referrer_id = int(context.args[0])
-            record_referral(referrer_id, user_id)
+            record_referral(referrer_id, user.id)
         except Exception:
             pass
 
-    if not await is_user_subscribed(context.bot, user_id):
+    if not await is_user_subscribed(context.bot, user.id):
         await update.message.reply_text(
             "⚠️ <b>कृपया बोट इस्तेमाल करने के लिए हमारा आधिकारिक चैनल जॉइन करें:</b>",
             reply_markup=get_force_sub_markup(),
@@ -504,17 +529,85 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+async def admin_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
+        return
+    
+    users = load_data(USERS_FILE, [])
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    today_str = now.strftime('%Y-%m-%d')
+    yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    today_count = 0
+    yesterday_count = 0
+    weekly_count = 0
+    monthly_count = 0
+    
+    for u in users:
+        if isinstance(u, dict):
+            last_act_str = u.get("last_active", "")
+            if last_act_str:
+                try:
+                    dt = datetime.fromisoformat(last_act_str)
+                    dt_ist = dt.astimezone(ist)
+                    d_str = dt_ist.strftime('%Y-%m-%d')
+                    
+                    if d_str == today_str:
+                        today_count += 1
+                    if d_str == yesterday_str:
+                        yesterday_count += 1
+                    
+                    diff_days = (now - dt_ist).days
+                    if diff_days <= 7:
+                        weekly_count += 1
+                    if diff_days <= 30:
+                        monthly_count += 1
+                except Exception:
+                    pass
+
+    msg = (
+        "📈 <b>ACTIVE USERS ACTIVITY REPORT</b>\n"
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        f"• 🟢 <b>Today Active:</b> <code>{today_count}</code>\n"
+        f"• 🟡 <b>Yesterday Active:</b> <code>{yesterday_count}</code>\n"
+        f"• 📊 <b>Weekly Active (7 Days):</b> <code>{weekly_count}</code>\n"
+        f"• 📅 <b>Monthly Active (30 Days):</b> <code>{monthly_count}</code>\n"
+        f"• 👥 <b>Total Registered:</b> <code>{len(users)}</code>"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
+
 async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
         await update.message.reply_text("❌ यह कमांड सिर्फ बोट एडमिन के लिए है!")
         return
     
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'rb') as f:
-            await update.message.reply_document(document=f, caption="📄 All Bot Users List")
-    else:
+    users = load_data(USERS_FILE, [])
+    if not users:
         await update.message.reply_text("ℹ️ अभी कोई यूजर डेटा उपलब्ध नहीं है।")
+        return
+        
+    report_lines = ["📋 <b>REGISTERED USERS LIST (WITH SERIAL NUMBERS)</b>\n"]
+    for idx, u in enumerate(users, 1):
+        if isinstance(u, dict):
+            uid = u.get("id")
+            name = u.get("name")
+            uname = u.get("username")
+            report_lines.append(f"{idx}. <b>Name:</b> {name} | <b>User:</b> {uname} | <code>{uid}</code>")
+        else:
+            report_lines.append(f"{idx}. <code>{u}</code>")
+            
+    report_text = "\n".join(report_lines)
+    
+    if len(report_text) > 4000:
+        file_bytes = io.BytesIO(report_text.encode('utf-8'))
+        file_bytes.name = "users_list.html"
+        await update.message.reply_document(document=file_bytes, caption="📄 All Bot Users Detailed List")
+    else:
+        await update.message.reply_text(report_text, parse_mode="HTML")
 
 async def admin_add_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -616,7 +709,8 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text(f"⏳ Broadcast starting to {len(users)} users...")
     
     success, failed = 0, 0
-    for uid in users:
+    for u in users:
+        uid = u.get("id") if isinstance(u, dict) else u
         try:
             await context.bot.send_message(chat_id=uid, text=broadcast_text, parse_mode="HTML")
             success += 1
@@ -633,14 +727,14 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if is_user_blocked(user_id):
+    user = update.effective_user
+    if is_user_blocked(user.id):
         return
 
     text = update.message.text
-    save_user(user_id)
+    save_user(user)
 
-    if not await is_user_subscribed(context.bot, user_id):
+    if not await is_user_subscribed(context.bot, user.id):
         await update.message.reply_text(
             "⚠️ कृपया पहले चैनल जॉइन करें:",
             reply_markup=get_force_sub_markup(),
@@ -677,10 +771,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "👥 VIP Referral Link":
         bot_user = context.bot.username
-        ref_link = f"https://t.me/{bot_user}?start={user_id}"
+        ref_link = f"https://t.me/{bot_user}?start={user.id}"
         refs = load_data(REFERRALS_FILE, {})
-        invites_count = len(refs.get(str(user_id), []))
-        vip_status = "🟢 VIP ACTIVE" if is_vip_user(user_id) else "🔴 FREE USER"
+        invites_count = len(refs.get(str(user.id), []))
+        vip_status = "🟢 VIP ACTIVE" if is_vip_user(user.id) else "🔴 FREE USER"
         
         msg = (
             "👥 <b>VIP Referral Program</b>\n\n"
@@ -769,6 +863,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", admin_stats))
+    app.add_handler(CommandHandler("user", admin_user_activity))
     app.add_handler(CommandHandler("users", admin_users_list))
     app.add_handler(CommandHandler("addvip", admin_add_vip))
     app.add_handler(CommandHandler("removevip", admin_remove_vip))
@@ -778,7 +873,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Full Admin & Force-Sub features...")
+    logging.info("Pro Bot is starting successfully with Separate User & Users commands...")
     app.run_polling()
 
 if __name__ == "__main__":
