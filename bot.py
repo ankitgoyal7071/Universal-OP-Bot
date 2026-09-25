@@ -34,6 +34,8 @@ BLOCKED_FILE = "bot_blocked.json"
 VIP_FILE = "bot_manual_vip.json"
 SUBSCRIPTIONS_FILE = "bot_subscriptions.json"
 
+WAITING_FOR_HELP = set()
+
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
     "2026-03-27", "2026-04-03", "2026-04-14", "2026-05-01",
@@ -276,7 +278,7 @@ def get_main_menu_keyboard():
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
         [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -521,7 +523,6 @@ async def target_checker_job(application):
                         all_symbols.add(sym)
 
                 for sym in all_symbols:
-                    # Skip check if market is closed or holiday for this symbol
                     ok, _ = validate_market_access(sym)
                     if not ok:
                         continue
@@ -826,6 +827,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Help & Support Flow Handler
+    if text == "🆘 Help & Support":
+        WAITING_FOR_HELP.add(user.id)
+        await update.message.reply_text(
+            "📝 <b>सहायता (Help & Support):</b>\n\n"
+            "कृपया अपनी समस्या, सुझाव या सवाल यहाँ लिखकर भेजें। यह मैसेज सीधा एडमिन के पास चला जाएगा:",
+            parse_mode="HTML"
+        )
+        return
+
+    if user.id in WAITING_FOR_HELP:
+        WAITING_FOR_HELP.remove(user.id)
+        admin_msg = (
+            f"🆘 <b>NEW HELP REQUEST FROM USER</b>\n"
+            f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+            f"👤 <b>Name:</b> {user.full_name}\n"
+            f"🏷️ <b>Username:</b> @{user.username if user.username else 'None'}\n"
+            f"🆔 <b>User ID:</b> <code>{user.id}</code>\n\n"
+            f"💬 <b>Message:</b>\n<i>{text}</i>"
+        )
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Failed to forward help message: {e}")
+
+        await update.message.reply_text(
+            "✅ <b>आपकी समस्या सफलतापूर्वक एडमिन तक पहुँचा दी गई है!</b>\n"
+            "अब आप नीचे मेनू से दोबारा अपने लेवल्स देख सकते हैं:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
     if text == "🔙 Main Menu":
         await update.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
         return
@@ -886,7 +920,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
         query_sym = text
-        # Save symbol to user's personal alert subscription list
         save_user_subscription(user.id, query_sym)
 
         ok, err_msg = validate_market_access(query_sym)
@@ -926,7 +959,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
+            await update.message.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -950,7 +983,6 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Start background target monitoring job with holiday checks
     start_target_monitor(app)
 
     app.add_handler(CommandHandler("start", start))
@@ -965,7 +997,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Multi-Symbol Alert & Holiday Filter...")
+    logging.info("Pro Bot is starting successfully with Help & Support feature...")
     app.run_polling()
 
 if __name__ == "__main__":
