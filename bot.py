@@ -34,11 +34,19 @@ BLOCKED_FILE = "bot_blocked.json"
 VIP_FILE = "bot_manual_vip.json"
 SUBSCRIPTIONS_FILE = "bot_subscriptions.json"
 PERFORMANCE_FILE = "bot_performance_logs.json"
+START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
 
-# Main symbols to track for Performance Win-Rate (7 Major Assets)
-TRACKED_PERFORMANCE_SYMBOLS = ["NIFTY 50", "BANKNIFTY", "SPOT GOLD (XAUUSD)", "BITCOIN (BTC)", "ETHEREUM (ETH)", "GLOBAL CRUDE OIL"]
+# Main tracked assets with Leverage Multipliers (Nifty/BankNifty = 1x, Gold/Crypto/Crude = 50x)
+TRACKED_ASSETS = {
+    "NIFTY 50": {"leverage": 1, "unit": "Pts"},
+    "BANKNIFTY": {"leverage": 1, "unit": "Pts"},
+    "SPOT GOLD (XAUUSD)": {"leverage": 50, "unit": "$"},
+    "BITCOIN (BTC)": {"leverage": 50, "unit": "$"},
+    "ETHEREUM (ETH)": {"leverage": 50, "unit": "$"},
+    "GLOBAL CRUDE OIL": {"leverage": 50, "unit": "$"}
+}
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -70,6 +78,18 @@ def save_data(file_path, data):
             json.dump(data, f, indent=4)
     except Exception as e:
         logging.error(f"Error saving {file_path}: {e}")
+
+def get_running_days():
+    ist = pytz.timezone('Asia/Kolkata')
+    today = datetime.now(ist).date()
+    data = load_data(START_DATE_FILE, {})
+    if "start_date" not in data:
+        data["start_date"] = today.isoformat()
+        save_data(START_DATE_FILE, data)
+    
+    start_date = datetime.fromisoformat(data["start_date"]).date()
+    delta_days = (today - start_date).days + 1
+    return max(1, delta_days), start_date.strftime('%d %b %Y'), today.strftime('%d %b %Y')
 
 def save_user(user):
     users = load_data(USERS_FILE, [])
@@ -110,13 +130,18 @@ def save_user_subscription(user_id, symbol):
         subs[u_str].append(symbol)
         save_data(SUBSCRIPTIONS_FILE, subs)
 
-def log_performance_hit(symbol, target_name):
+def log_performance_profit(symbol, target_name, raw_points):
     logs = load_data(PERFORMANCE_FILE, [])
     ist = pytz.timezone('Asia/Kolkata')
     current_time = datetime.now(ist).isoformat()
+    
+    lev = TRACKED_ASSETS.get(symbol, {}).get("leverage", 1)
+    leveraged_profit = raw_points * lev
+    
     logs.append({
         "symbol": symbol,
         "target": target_name,
+        "profit": round(leveraged_profit, 2),
         "time": current_time
     })
     save_data(PERFORMANCE_FILE, logs)
@@ -291,10 +316,9 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
-        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("📈 Win-Rate Performance")],
-        [KeyboardButton("🏛️ FII/DII Data"), KeyboardButton("📅 Economic Calendar")],
-        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("🆘 Help & Support")],
-        [KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
+        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
+        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -391,8 +415,8 @@ def calculate_op_levels(df, symbol):
     targets = {}
     ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
     for idx, r in enumerate(ratios, 1):
-        targets[f"bt{idx}"] = round(doKdc + (range1 * r))
-        targets[f"st{idx}"] = round(doKdc - (range1 * r))
+        targets[f"bt{idx}"] = round(doKdc + (range1 * r), 2)
+        targets[f"st{idx}"] = round(doKdc - (range1 * r), 2)
 
     clean_symbol = symbol.upper().strip()
     is_major_index = any(x in clean_symbol for x in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
@@ -404,10 +428,10 @@ def calculate_op_levels(df, symbol):
         "cpr_type": cpr_type,
         "market_mood": get_market_mood(),
         "is_major_index": is_major_index,
-        "b_above": round(doKdc + (range1 * 0.236)),
-        "b_conf": round(doKdc + (range1 * 0.382)),
-        "s_below": round(doKdc - (range1 * 0.236)),
-        "s_conf": round(doKdc - (range1 * 0.382)),
+        "b_above": round(doKdc + (range1 * 0.236), 2),
+        "b_conf": round(doKdc + (range1 * 0.382), 2),
+        "s_below": round(doKdc - (range1 * 0.236), 2),
+        "s_conf": round(doKdc - (range1 * 0.382), 2),
         "strikes": strikes,
         **targets
     }
@@ -509,14 +533,15 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     return "\n".join(out)
 
 def get_performance_report():
+    days_count, start_date_str, current_date_str = get_running_days()
     logs = load_data(PERFORMANCE_FILE, [])
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
     today_str = now.strftime('%Y-%m-%d')
     
-    daily_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
-    weekly_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
-    monthly_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
+    daily_profit = {sym: 0.0 for sym in TRACKED_ASSETS}
+    weekly_profit = {sym: 0.0 for sym in TRACKED_ASSETS}
+    monthly_profit = {sym: 0.0 for sym in TRACKED_ASSETS}
     
     for log in logs:
         try:
@@ -524,42 +549,47 @@ def get_performance_report():
             dt_ist = dt.astimezone(ist)
             d_str = dt_ist.strftime('%Y-%m-%d')
             sym = log.get("symbol")
-            target = log.get("target") # "T1" or "T2"
+            profit_val = float(log.get("profit", 0.0))
             
-            if sym in TRACKED_PERFORMANCE_SYMBOLS:
+            if sym in TRACKED_ASSETS:
                 if d_str == today_str:
-                    daily_hits[sym][target] += 1
+                    daily_profit[sym] += profit_val
                 if (now - dt_ist).days <= 7:
-                    weekly_hits[sym][target] += 1
+                    weekly_profit[sym] += profit_val
                 if (now - dt_ist).days <= 30:
-                    monthly_hits[sym][target] += 1
+                    monthly_profit[sym] += profit_val
         except Exception:
             pass
             
     msg = [
-        "📈 <b>WIN-RATE & PERFORMANCE TRACKER</b>",
+        f"🎯 <b>DAY {days_count} PERFORMANCE REPORT</b>",
+        f"📅 <b>Duration:</b> <code>{start_date_str} - {current_date_str}</code> ({days_count} Days Running)",
+        "ℹ️ <i>(Gold, Crypto & Crude include 50x Leverage Factor)</i>",
         "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n",
-        "🎯 <b>TODAY'S TARGET HITS:</b>"
+        "📈 <b>TODAY'S PROFIT EARNED:</b>"
     ]
-    for sym, counts in daily_hits.items():
-        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+    for sym, val in daily_profit.items():
+        unit = TRACKED_ASSETS[sym]["unit"]
+        msg.append(f"• <b>{sym}:</b> <code>+{val:,.2f} {unit}</code>")
         
     msg.extend([
-        "\n📊 <b>WEEKLY PERFORMANCE (7 DAYS):</b>"
+        "\n📊 <b>WEEKLY PROFIT EARNED (7 DAYS):</b>"
     ])
-    for sym, counts in weekly_hits.items():
-        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+    for sym, val in weekly_profit.items():
+        unit = TRACKED_ASSETS[sym]["unit"]
+        msg.append(f"• <b>{sym}:</b> <code>+{val:,.2f} {unit}</code>")
         
     msg.extend([
-        "\n📅 <b>MONTHLY PERFORMANCE (30 DAYS):</b>"
+        "\n📅 <b>MONTHLY PROFIT EARNED (30 DAYS):</b>"
     ])
-    for sym, counts in monthly_hits.items():
-        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+    for sym, val in monthly_profit.items():
+        unit = TRACKED_ASSETS[sym]["unit"]
+        msg.append(f"• <b>{sym}:</b> <code>+{val:,.2f} {unit}</code>")
         
     msg.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(msg)
 
-# Background Target Monitoring System with Performance Logging
+# Background Target Monitoring System with 50x Leverage Profit Logging
 notified_today = set()
 
 def start_target_monitor(application):
@@ -599,6 +629,8 @@ async def target_checker_job(application):
                         lvl = calculate_op_levels(df, sym)
                         current_lcp = lvl['current_price']
                         
+                        b_conf = lvl['b_conf']
+                        s_conf = lvl['s_conf']
                         bt1 = lvl['bt1']
                         bt2 = lvl['bt2']
                         st1 = lvl['st1']
@@ -606,33 +638,36 @@ async def target_checker_job(application):
 
                         hit_msg = None
                         target_key = None
-                        target_type_logged = None
+                        raw_points_earned = 0.0
+                        matched_asset = None
+
+                        for asset_name in TRACKED_ASSETS:
+                            if asset_name.lower() in sym.lower() or sym.lower() in asset_name.lower():
+                                matched_asset = asset_name
+                                break
 
                         if current_lcp >= bt1 and f"{today_str}_{sym}_BT1" not in notified_today:
-                            hit_msg = f"🎯 <b>TARGET 1 (T1) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {bt1})!"
+                            hit_msg = f"🎯 <b>TARGET 1 (T1) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code>!"
                             target_key = f"{today_str}_{sym}_BT1"
-                            target_type_logged = "T1"
+                            raw_points_earned = abs(bt1 - b_conf)
                         elif current_lcp >= bt2 and f"{today_str}_{sym}_BT2" not in notified_today:
-                            hit_msg = f"🔥 <b>TARGET 2 (T2) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {bt2})!"
+                            hit_msg = f"🔥 <b>TARGET 2 (T2) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code>!"
                             target_key = f"{today_str}_{sym}_BT2"
-                            target_type_logged = "T2"
+                            raw_points_earned = abs(bt2 - b_conf)
                         elif current_lcp <= st1 and f"{today_str}_{sym}_ST1" not in notified_today:
-                            hit_msg = f"🎯 <b>TARGET 1 (T1 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {st1})!"
+                            hit_msg = f"🎯 <b>TARGET 1 (T1 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code>!"
                             target_key = f"{today_str}_{sym}_ST1"
-                            target_type_logged = "T1"
+                            raw_points_earned = abs(s_conf - st1)
                         elif current_lcp <= st2 and f"{today_str}_{sym}_ST2" not in notified_today:
-                            hit_msg = f"🔥 <b>TARGET 2 (T2 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {st2})!"
+                            hit_msg = f"🔥 <b>TARGET 2 (T2 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code>!"
                             target_key = f"{today_str}_{sym}_ST2"
-                            target_type_logged = "T2"
+                            raw_points_earned = abs(s_conf - st2)
 
                         if hit_msg and target_key:
                             notified_today.add(target_key)
                             
-                            # Log performance for main tracked symbols
-                            for tracked_s in TRACKED_PERFORMANCE_SYMBOLS:
-                                if tracked_s.lower() in sym.lower():
-                                    log_performance_hit(tracked_s, target_type_logged)
-                                    break
+                            if matched_asset:
+                                log_performance_profit(matched_asset, target_key, raw_points_earned)
 
                             for uid_str, user_syms in subs.items():
                                 if sym in user_syms:
@@ -680,6 +715,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ================= ADMIN COMMANDS =================
+async def admin_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return # आम यूजर के लिए चुपचाप इग्नोर कर देगा
+    
+    report = get_performance_report()
+    await update.message.reply_text(report, parse_mode="HTML")
+
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -939,11 +982,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "📈 Win-Rate Performance":
-        report = get_performance_report()
-        await update.message.reply_text(report, parse_mode="HTML")
-        return
-
     if text == "🔙 Main Menu":
         await update.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
         return
@@ -1070,6 +1108,7 @@ def main():
     start_target_monitor(app)
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("performance", admin_performance)) # गुप्त एडमिन कमांड
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("user", admin_user_activity))
     app.add_handler(CommandHandler("users", admin_users_list))
@@ -1081,7 +1120,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Win-Rate Performance Tracker...")
+    logging.info("Pro Bot is starting successfully with Secret Admin Performance Command & Auto Day Counter...")
     app.run_polling()
 
 if __name__ == "__main__":
