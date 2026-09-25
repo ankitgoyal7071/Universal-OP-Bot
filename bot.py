@@ -252,7 +252,6 @@ def get_forex_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💱 SPOT GOLD (XAUUSD)"), KeyboardButton("💱 SPOT SILVER (XAGUSD)")],
         [KeyboardButton("💱 GLOBAL CRUDE OIL"), KeyboardButton("💱 GLOBAL NATURAL GAS")],
-        [KeyboardButton("💶 EUR/USD"), KeyboardButton("💷 GBP/USD")],
         [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
 
@@ -360,23 +359,23 @@ def calculate_op_levels(df, symbol):
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
-        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").replace("💶", "").replace("💷", "").strip()
+        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
         
+        # यह जांचें कि क्या यह भारतीय MCX कमोडिटी है (जिसे INR और भारतीय यूनिट में बदलना है)
         is_mcx = "MCX" in clean_sym
         
-        # तय करें कि कौन सा टिकर फेच करना है
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
             resolved = "XAUUSD=X"
         elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
             resolved = "XAGUSD=X"
         elif "MCX GOLD" in clean_sym:
-            resolved = "GC=F"  # ग्लोबल गोल्ड से भारतीय MCX INR में कन्वर्ट होगा
+            resolved = "GC=F"
         elif "MCX SILVER" in clean_sym:
-            resolved = "SI=F"  # ग्लोबल सिल्वर से भारतीय MCX INR में कन्वर्ट होगा
-        elif "MCX CRUDE" in clean_sym or clean_sym == "CRUDE OIL":
-            resolved = "CL=F"  # क्रूड ऑयल (MCX के लिए INR कन्वर्ट होगा)
-        elif "MCX NATURAL" in clean_sym or clean_sym == "NATURAL GAS":
-            resolved = "NG=F"  # नेचुरल गैस (MCX के लिए INR कन्वर्ट होगा)
+            resolved = "SI=F"
+        elif "MCX CRUDE" in clean_sym:
+            resolved = "CL=F"
+        elif "MCX NATURAL" in clean_sym:
+            resolved = "NG=F"
         elif "GLOBAL CRUDE" in clean_sym:
             resolved = "CL=F"
         elif "GLOBAL NATURAL" in clean_sym:
@@ -399,20 +398,18 @@ def fetch_data(symbol):
                     df.columns = df.columns.get_level_values(0)
                 df = df.dropna()
                 if len(df) >= 12:
-                    # अगर यह MCX कमोडिटी है, तो लाइव USD/INR रेट से मल्टीप्लाई करके भारतीय मूल्य (INR) में बदलें
+                    # यदि यह MCX है, तो USD को INR में बदलें और Gold/Silver के लिए सही कॉन्ट्रैक्ट यूनिट लगाएं
                     if is_mcx:
                         try:
                             usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
                             if not usdinr_df.empty:
                                 usdinr_rate = float(usdinr_df['Close'].iloc[-1])
                                 if "GOLD" in clean_sym:
-                                    # 1 troy oz = 31.1035g, MCX Gold 10 gram contract calculation
-                                    multiplier = (usdinr_rate / 31.1035) * 10
+                                    multiplier = (usdinr_rate / 31.1035) * 10  # 10 ग्राम MCX गोल्ड प्राइस
                                 elif "SILVER" in clean_sym:
-                                    # 1 troy oz = 31.1035g, MCX Silver 1 kg (1000g) contract calculation
-                                    multiplier = (usdinr_rate / 31.1035) * 1000
+                                    multiplier = (usdinr_rate / 31.1035) * 1000 # 1 किलो MCX सिल्वर प्राइस
                                 else:
-                                    multiplier = usdinr_rate
+                                    multiplier = usdinr_rate # Crude / Natural Gas INR conversion
                                 
                                 for col in ['Open', 'High', 'Low', 'Close']:
                                     if col in df.columns:
@@ -479,7 +476,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
-        "नीचे दिए गए मेनू से विकल्प चुनें या स्टॉक/फॉरेक्स/क्रिप्टो नाम (जैसे RELIANCE, XAUUSD, BTC) टाइप करें:",
+        "नीचे दिए गए मेनू से विकल्प चुनें या सिंबल टाइप करें:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
@@ -549,17 +546,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>OP Levels / Stocks:</b> Nifty या कोई भी स्टॉक (जैसे RELIANCE) सीधे टाइप करें।\n"
-            "2. <b>🥇 Commodity Tab:</b> भारतीय MCX Gold, Silver, Crude, Natural Gas (INR मूल्य)।\n"
-            "3. <b>💱 Forex & Global Tab:</b> ग्लोबल Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude/NG।\n"
-            "4. <b>🪙 Crypto Tab:</b> Bitcoin (BTC) और Ethereum (ETH)।"
+            "1. <b>🥇 Commodity Tab (MCX):</b> MCX Gold (10g), MCX Silver (1kg), MCX Crude & Natural Gas (INR भाव).\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude & Natural Gas (USD भाव).\n"
+            "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
 
     elif text in ["📊 NIFTY 50", "📈 BANK NIFTY", "🪙 FIN NIFTY", "⚡ SENSEX", "⚡ MIDCAP NIFTY", 
                   "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ MCX CRUDE OIL", "🔥 MCX NATURAL GAS",
-                  "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💱 GLOBAL CRUDE OIL", "💱 GLOBAL NATURAL GAS", "💶 EUR/USD", "💷 GBP/USD",
+                  "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💱 GLOBAL CRUDE OIL", "💱 GLOBAL NATURAL GAS",
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
         query_sym = text
@@ -598,7 +594,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल (जैसे RELIANCE, XAUUSD, BTC) टाइप करें।", parse_mode="HTML")
+            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल टाइप करें।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
