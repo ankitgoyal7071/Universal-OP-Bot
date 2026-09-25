@@ -33,8 +33,12 @@ REFERRALS_FILE = "bot_referrals.json"
 BLOCKED_FILE = "bot_blocked.json"
 VIP_FILE = "bot_manual_vip.json"
 SUBSCRIPTIONS_FILE = "bot_subscriptions.json"
+PERFORMANCE_FILE = "bot_performance_logs.json"
 
 WAITING_FOR_HELP = set()
+
+# Main symbols to track for Performance Win-Rate (7 Major Assets)
+TRACKED_PERFORMANCE_SYMBOLS = ["NIFTY 50", "BANKNIFTY", "SPOT GOLD (XAUUSD)", "BITCOIN (BTC)", "ETHEREUM (ETH)", "GLOBAL CRUDE OIL"]
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -105,6 +109,17 @@ def save_user_subscription(user_id, symbol):
     if symbol not in subs[u_str]:
         subs[u_str].append(symbol)
         save_data(SUBSCRIPTIONS_FILE, subs)
+
+def log_performance_hit(symbol, target_name):
+    logs = load_data(PERFORMANCE_FILE, [])
+    ist = pytz.timezone('Asia/Kolkata')
+    current_time = datetime.now(ist).isoformat()
+    logs.append({
+        "symbol": symbol,
+        "target": target_name,
+        "time": current_time
+    })
+    save_data(PERFORMANCE_FILE, logs)
 
 def record_referral(referrer_id, new_user_id):
     refs = load_data(REFERRALS_FILE, {})
@@ -276,9 +291,10 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
-        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
-        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("📈 Win-Rate Performance")],
+        [KeyboardButton("🏛️ FII/DII Data"), KeyboardButton("📅 Economic Calendar")],
+        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("🆘 Help & Support")],
+        [KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -492,7 +508,58 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
-# Background Target Monitoring System with Holiday/Weekend Check
+def get_performance_report():
+    logs = load_data(PERFORMANCE_FILE, [])
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    today_str = now.strftime('%Y-%m-%d')
+    
+    daily_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
+    weekly_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
+    monthly_hits = {sym: {"T1": 0, "T2": 0} for sym in TRACKED_PERFORMANCE_SYMBOLS}
+    
+    for log in logs:
+        try:
+            dt = datetime.fromisoformat(log.get("time"))
+            dt_ist = dt.astimezone(ist)
+            d_str = dt_ist.strftime('%Y-%m-%d')
+            sym = log.get("symbol")
+            target = log.get("target") # "T1" or "T2"
+            
+            if sym in TRACKED_PERFORMANCE_SYMBOLS:
+                if d_str == today_str:
+                    daily_hits[sym][target] += 1
+                if (now - dt_ist).days <= 7:
+                    weekly_hits[sym][target] += 1
+                if (now - dt_ist).days <= 30:
+                    monthly_hits[sym][target] += 1
+        except Exception:
+            pass
+            
+    msg = [
+        "📈 <b>WIN-RATE & PERFORMANCE TRACKER</b>",
+        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n",
+        "🎯 <b>TODAY'S TARGET HITS:</b>"
+    ]
+    for sym, counts in daily_hits.items():
+        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+        
+    msg.extend([
+        "\n📊 <b>WEEKLY PERFORMANCE (7 DAYS):</b>"
+    ])
+    for sym, counts in weekly_hits.items():
+        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+        
+    msg.extend([
+        "\n📅 <b>MONTHLY PERFORMANCE (30 DAYS):</b>"
+    ])
+    for sym, counts in monthly_hits.items():
+        msg.append(f"• <b>{sym}:</b> T1: <code>{counts['T1']}</code> | T2: <code>{counts['T2']}</code>")
+        
+    msg.append(SEBI_DISCLAIMER_TEXT)
+    return "\n".join(msg)
+
+# Background Target Monitoring System with Performance Logging
 notified_today = set()
 
 def start_target_monitor(application):
@@ -539,22 +606,34 @@ async def target_checker_job(application):
 
                         hit_msg = None
                         target_key = None
+                        target_type_logged = None
 
                         if current_lcp >= bt1 and f"{today_str}_{sym}_BT1" not in notified_today:
                             hit_msg = f"🎯 <b>TARGET 1 (T1) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {bt1})!"
                             target_key = f"{today_str}_{sym}_BT1"
+                            target_type_logged = "T1"
                         elif current_lcp >= bt2 and f"{today_str}_{sym}_BT2" not in notified_today:
                             hit_msg = f"🔥 <b>TARGET 2 (T2) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {bt2})!"
                             target_key = f"{today_str}_{sym}_BT2"
+                            target_type_logged = "T2"
                         elif current_lcp <= st1 and f"{today_str}_{sym}_ST1" not in notified_today:
                             hit_msg = f"🎯 <b>TARGET 1 (T1 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {st1})!"
                             target_key = f"{today_str}_{sym}_ST1"
+                            target_type_logged = "T1"
                         elif current_lcp <= st2 and f"{today_str}_{sym}_ST2" not in notified_today:
                             hit_msg = f"🔥 <b>TARGET 2 (T2 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {st2})!"
                             target_key = f"{today_str}_{sym}_ST2"
+                            target_type_logged = "T2"
 
                         if hit_msg and target_key:
                             notified_today.add(target_key)
+                            
+                            # Log performance for main tracked symbols
+                            for tracked_s in TRACKED_PERFORMANCE_SYMBOLS:
+                                if tracked_s.lower() in sym.lower():
+                                    log_performance_hit(tracked_s, target_type_logged)
+                                    break
+
                             for uid_str, user_syms in subs.items():
                                 if sym in user_syms:
                                     try:
@@ -821,7 +900,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not await is_user_subscribed(context.bot, user.id):
         await update.message.reply_text(
-            "⚠️ कृपया पहले चैनल जॉइन करें:",
+            "⚠️ <b>कृपया बोट इस्तेमाल करने के लिए हमारा आधिकारिक चैनल जॉइन करें:</b>",
             reply_markup=get_force_sub_markup(),
             parse_mode="HTML"
         )
@@ -858,6 +937,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
+        return
+
+    if text == "📈 Win-Rate Performance":
+        report = get_performance_report()
+        await update.message.reply_text(report, parse_mode="HTML")
         return
 
     if text == "🔙 Main Menu":
@@ -997,7 +1081,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Help & Support feature...")
+    logging.info("Pro Bot is starting successfully with Win-Rate Performance Tracker...")
     app.run_polling()
 
 if __name__ == "__main__":
