@@ -179,9 +179,9 @@ def get_economic_calendar():
         "📈 <b>3. India CPI Inflation & IIP Data:</b>\n"
         "• <i>Impact:</i> Domestic Macro & Bond Yields\n\n"
         "💼 <b>4. US Non-Farm Payrolls (NFP):</b>\n"
-        "• <i>Impact:</i> Dollar Index (DXY), MCX Gold & Silver\n\n"
+        "• <i>Impact:</i> Dollar Index (DXY), Gold & Silver\n\n"
         "🛢️ <b>5. US EIA Crude Oil Inventories:</b>\n"
-        "• <i>Impact:</i> MCX Crude Oil, Energy Stocks"
+        "• <i>Impact:</i> Global Crude Oil, Energy Stocks"
         + SEBI_DISCLAIMER_TEXT
     )
 
@@ -228,10 +228,10 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🥇 Commodity Tab (MCX)")],
-        [KeyboardButton("💱 Forex & Global Tab"), KeyboardButton("🪙 Crypto Tab")],
-        [KeyboardButton("🏛️ FII/DII Data"), KeyboardButton("📅 Economic Calendar")],
-        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
+        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
+        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
+        [KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -239,13 +239,6 @@ def get_op_levels_keyboard():
         [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANKNIFTY")],
         [KeyboardButton("🪙 FINNIFTY"), KeyboardButton("⚡ SENSEX")],
         [KeyboardButton("⚡ MIDCPNIFTY"), KeyboardButton("🔙 Main Menu")]
-    ], resize_keyboard=True)
-
-def get_commodity_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
-        [KeyboardButton("🛢️ MCX CRUDE OIL"), KeyboardButton("🔥 MCX NATURAL GAS")],
-        [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
 
 def get_forex_keyboard():
@@ -359,23 +352,12 @@ def calculate_op_levels(df, symbol):
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
-        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
-        
-        # केवल कमोडिटी टैब (MCX) के लिए भारतीय कन्वर्जन और फैक्टर लागू होगा
-        is_mcx = "MCX" in clean_sym
+        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").strip()
         
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
             resolved = "XAUUSD=X"
         elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
             resolved = "XAGUSD=X"
-        elif "MCX GOLD" in clean_sym:
-            resolved = "GC=F"
-        elif "MCX SILVER" in clean_sym:
-            resolved = "SI=F"
-        elif "MCX CRUDE" in clean_sym:
-            resolved = "CL=F"
-        elif "MCX NATURAL" in clean_sym:
-            resolved = "NG=F"
         elif "GLOBAL CRUDE" in clean_sym:
             resolved = "CL=F"
         elif "GLOBAL NATURAL" in clean_sym:
@@ -399,34 +381,6 @@ def fetch_data(symbol):
                 df = df.dropna()
                 
                 if len(df) >= 12:
-                    # यदि यह MCX कमोडिटी है, तभी लाइव एक्सचेंज रेट और 1.143 फैक्टर लगेगा
-                    if is_mcx:
-                        try:
-                            usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
-                            if isinstance(usdinr_df.columns, pd.MultiIndex):
-                                usdinr_df.columns = usdinr_df.columns.get_level_values(0)
-                            usdinr_df = usdinr_df.dropna()
-                            
-                            if not usdinr_df.empty:
-                                usdinr_rate = float(usdinr_df['Close'].iloc[-1])
-                                
-                                if "GOLD" in clean_sym:
-                                    multiplier = (1 / 31.1035) * 10 * usdinr_rate * 1.143
-                                elif "SILVER" in clean_sym:
-                                    multiplier = (1 / 31.1035) * 1000 * usdinr_rate * 1.143
-                                elif "CRUDE" in clean_sym:
-                                    multiplier = usdinr_rate * 1.143 * 1.35
-                                elif "NATURAL" in clean_sym:
-                                    multiplier = usdinr_rate * 1.143 * 2.10
-                                else:
-                                    multiplier = usdinr_rate * 1.143
-                                
-                                for col in ['Open', 'High', 'Low', 'Close']:
-                                    if col in df.columns:
-                                        df[col] = df[col] * multiplier
-                        except Exception as ex:
-                            logging.error(f"MCX Currency Conversion Error: {ex}")
-                    
                     return df, s
             except Exception:
                 continue
@@ -512,10 +466,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
         return
 
-    elif text == "🥇 Commodity Tab (MCX)":
-        await update.message.reply_text("भारतीय कमोडिटी (MCX India - INR) चुनें:", reply_markup=get_commodity_keyboard())
-        return
-
     elif text == "💱 Forex & Global Tab":
         await update.message.reply_text("फॉरेक्स & ग्लोबल मार्केट्स (USD) चुनें:", reply_markup=get_forex_keyboard())
         return
@@ -556,15 +506,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>🥇 Commodity Tab (MCX):</b> लाइव एक्सचेंज रेट + 1.143 फैक्टर के साथ भारतीय MCX भाव।\n"
-            "2. <b>💱 Forex & Global Tab:</b> शुद्ध ग्लोबल डॉलर भाव (बिना किसी फैक्टर के)।\n"
+            "1. <b>📊 OP Levels Tab:</b> Nifty, BankNifty, Finnifty, Sensex, MidcpNifty.\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver, Global Crude & Natural Gas.\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
 
     elif text in ["📊 NIFTY 50", "📈 BANKNIFTY", "🪙 FINNIFTY", "⚡ SENSEX", "⚡ MIDCPNIFTY", 
-                  "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ MCX CRUDE OIL", "🔥 MCX NATURAL GAS",
                   "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💱 GLOBAL CRUDE OIL", "💱 GLOBAL NATURAL GAS",
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
