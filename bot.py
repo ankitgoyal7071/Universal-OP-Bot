@@ -1,8 +1,5 @@
 def calculate_op_levels(df, query_sym):
     try:
-        print(f"DataFrame Columns: {df.columns}") # रेंडर लॉग्स में चेक करने के लिए
-        
-        # कॉलम के नाम चाहे छोटे हों या बड़े, यह अपने आप ढूँढ लेगा
         cols = {str(col).lower(): col for col in df.columns}
         h_col = cols.get('high', 'High')
         l_col = cols.get('low', 'Low')
@@ -12,17 +9,18 @@ def calculate_op_levels(df, query_sym):
         low = float(df[l_col].iloc[-1])
         close = float(df[c_col].iloc[-1])
         
-        # लेवल्स की डिक्शनरी
+        # सभी जरूरी कीज़ (Keys) यहाँ जोड़ दी गई हैं ताकि KeyError न आए
         levels = {
+            "current_price": close,
             "Entry": close,
             "Target 1": close + (high - low) * 0.5,
             "Target 2": close + (high - low) * 1.0
         }
-        print(f"Calculated Levels: {levels}")
         return levels
     except Exception as e:
-        print(f"Detailed Error in calculate_op_levels: {e}")
+        print(f"Error in calculate_op_levels: {e}")
         return None
+
 
 
 import os
