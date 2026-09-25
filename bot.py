@@ -84,7 +84,6 @@ def is_vip_user(user_id):
 
 def validate_market_access(symbol=""):
     sym_upper = symbol.upper()
-    # Crypto trades 24/7, bypass holiday/weekend restrictions
     if "BTC" in sym_upper or "ETH" in sym_upper or "BITCOIN" in sym_upper or "ETHEREUM" in sym_upper or "-USD" in sym_upper:
         return True, ""
 
@@ -101,7 +100,6 @@ def validate_market_access(symbol=""):
             
     return True, ""
 
-# 🏛️ FII / DII Data Fetcher System
 def fetch_fii_dii_data():
     try:
         session = requests.Session()
@@ -167,7 +165,6 @@ def fetch_fii_dii_data():
         + SEBI_DISCLAIMER_TEXT
     )
 
-# 📅 Economic Calendar System
 def get_economic_calendar():
     ist = pytz.timezone('Asia/Kolkata')
     curr_month = datetime.now(ist).strftime('%B %Y')
@@ -359,7 +356,22 @@ def calculate_op_levels(df, symbol):
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
-        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").strip()
+        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
+        
+        # स्मार्ट मैपिंग ताकि कमोडिटी और क्रिप्टो के नाम सीधे कैच हो जाएं
+        if "GOLD" in clean_sym:
+            clean_sym = "GOLD"
+        elif "SILVER" in clean_sym:
+            clean_sym = "SILVER"
+        elif "CRUDE" in clean_sym:
+            clean_sym = "CRUDE"
+        elif "NATURAL" in clean_sym:
+            clean_sym = "NATURALGAS"
+        elif "BITCOIN" in clean_sym or clean_sym == "BTC":
+            clean_sym = "BTC"
+        elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
+            clean_sym = "ETH"
+
         resolved = ALIAS_MAP.get(clean_sym, clean_sym)
         candidates = [resolved]
         if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
@@ -510,7 +522,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS",
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
-        query_sym = "BTC" if "BITCOIN" in text else ("ETH" if "ETHEREUM" in text else text)
+        query_sym = text
         ok, err_msg = validate_market_access(query_sym)
         if not ok:
             await update.message.reply_text(err_msg, parse_mode="HTML")
@@ -530,7 +542,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     else:
-        # किसी भी कस्टम स्टॉक या क्रिप्टो (जैसे RELIANCE, BTC, ETH) के नाम को प्रोसेस करने के लिए
         symbol_input = text.strip()
         ok, err_msg = validate_market_access(symbol_input)
         if not ok:
