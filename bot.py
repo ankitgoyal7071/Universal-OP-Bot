@@ -84,7 +84,8 @@ def get_running_days():
     today = datetime.now(ist).date()
     data = load_data(START_DATE_FILE, {})
     if "start_date" not in data:
-        data["start_date"] = today.isoformat()
+        # Fixed starting date set to 20 September 2026
+        data["start_date"] = "2026-09-20"
         save_data(START_DATE_FILE, data)
     
     start_date = datetime.fromisoformat(data["start_date"]).date()
@@ -1108,7 +1109,7 @@ def main():
     start_target_monitor(app)
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("performance", admin_performance)) # गुप्त एडमिन कमांड
+    app.add_handler(CommandHandler("performance", admin_performance))
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("user", admin_user_activity))
     app.add_handler(CommandHandler("users", admin_users_list))
@@ -1120,7 +1121,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Secret Admin Performance Command & Auto Day Counter...")
+    logging.info("Pro Bot is starting successfully with 20 Sept Start Date Tracking...")
     app.run_polling()
 
 if __name__ == "__main__":
