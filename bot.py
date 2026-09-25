@@ -18,6 +18,7 @@ def calculate_op_levels(df, query_sym):
         }
         return levels
     except Exception as e:
+        traceback.print_exc()
         print(f"Error in calculate_op_levels: {e}")
         return None
 
@@ -28,6 +29,7 @@ import threading
 import asyncio
 import json
 import io
+import traceback
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
