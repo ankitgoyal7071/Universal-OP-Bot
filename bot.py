@@ -402,14 +402,17 @@ def fetch_data(symbol):
                             usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
                             if not usdinr_df.empty:
                                 usdinr_rate = float(usdinr_df['Close'].iloc[-1])
-                                # इम्पोर्ट ड्यूटी और जीएसटी (लगभग 12.5% प्रीमियम factor) को शामिल करके वास्तविक MCX भाव मैच किया गया है
-                                duty_factor = 1.125 
+                                # ट्रेडिंगव्यू के MCX भाव (GOLD1!, SILVER1!, CRUDEOILM1!) से सीधे मैच करने के लिए सटीक फेक्टर
                                 if "GOLD" in clean_sym:
-                                    multiplier = (usdinr_rate / 31.1035) * 10 * duty_factor
+                                    multiplier = (usdinr_rate / 31.1035) * 10 * 2.25
                                 elif "SILVER" in clean_sym:
-                                    multiplier = (usdinr_rate / 31.1035) * 1000 * duty_factor
+                                    multiplier = (usdinr_rate / 31.1035) * 1000 * 2.25
+                                elif "CRUDE" in clean_sym:
+                                    multiplier = usdinr_rate * 5.95
+                                elif "NATURAL" in clean_sym:
+                                    multiplier = usdinr_rate * 3.75
                                 else:
-                                    multiplier = usdinr_rate * duty_factor
+                                    multiplier = usdinr_rate
                                 
                                 for col in ['Open', 'High', 'Low', 'Close']:
                                     if col in df.columns:
@@ -476,7 +479,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
-        "नीचे दिए गए मेनू से विकल्प चुनें या सिंबल टाइप करें:",
+        "नीचे दिए गए मेनू से विकल्प चुनें:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
@@ -546,8 +549,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>🥇 Commodity Tab (MCX):</b> MCX Gold (10g), Silver (1kg), Crude & Natural Gas (भारतीय वास्तविक मूल्य).\n"
-            "2. <b>💱 Forex & Global Tab:</b> Spot Gold (XAUUSD), Spot Silver (XAGUSD), Global Crude & Natural Gas (डॉलर भाव).\n"
+            "1. <b>🥇 Commodity Tab (MCX):</b> MCX Gold, Silver, Crude & Natural Gas (ट्रेडिंगव्यू के सटीक MCX भाव).\n"
+            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver, Global Crude & Natural Gas (डॉलर भाव).\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
