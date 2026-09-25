@@ -361,6 +361,7 @@ def fetch_data(symbol):
         sym_u = symbol.upper().strip()
         clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
         
+        # केवल कमोडिटी टैब (MCX) के लिए भारतीय कन्वर्जन और फैक्टर लागू होगा
         is_mcx = "MCX" in clean_sym
         
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
@@ -398,6 +399,7 @@ def fetch_data(symbol):
                 df = df.dropna()
                 
                 if len(df) >= 12:
+                    # यदि यह MCX कमोडिटी है, तभी लाइव एक्सचेंज रेट और 1.143 फैक्टर लगेगा
                     if is_mcx:
                         try:
                             usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
@@ -554,8 +556,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>🥇 Commodity Tab (MCX):</b> Gold, Silver, Crude, Natural Gas.\n"
-            "2. <b>💱 Forex & Global Tab:</b> Spot Gold, Spot Silver, Global Crude & Natural Gas.\n"
+            "1. <b>🥇 Commodity Tab (MCX):</b> लाइव एक्सचेंज रेट + 1.143 फैक्टर के साथ भारतीय MCX भाव।\n"
+            "2. <b>💱 Forex & Global Tab:</b> शुद्ध ग्लोबल डॉलर भाव (बिना किसी फैक्टर के)।\n"
             "3. <b>🪙 Crypto Tab:</b> Bitcoin & Ethereum."
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
