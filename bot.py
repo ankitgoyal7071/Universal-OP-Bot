@@ -392,38 +392,39 @@ def fetch_data(symbol):
 
         for s in candidates:
             try:
-                if is_mcx:
-                    tickers_to_fetch = [s, "USDINR=X"]
-                    data = yf.download(tickers_to_fetch, period="5d", interval="1d", progress=False, group_by='ticker')
-                    
-                    if not data.empty and s in data and "USDINR=X" in data:
-                        df = data[s].dropna()
-                        usdinr_df = data["USDINR=X"].dropna()
-                        
-                        if len(df) >= 12 and not usdinr_df.empty:
-                            usdinr_rate = float(usdinr_df['Close'].iloc[-1])
-                            
-                            if "GOLD" in clean_sym:
-                                multiplier = (1 / 31.1035) * 10 * usdinr_rate * 1.143
-                            elif "SILVER" in clean_sym:
-                                multiplier = (1 / 31.1035) * 1000 * usdinr_rate * 1.143
-                            elif "CRUDE" in clean_sym:
-                                multiplier = usdinr_rate * 1.143 * 1.35
-                            elif "NATURAL" in clean_sym:
-                                multiplier = usdinr_rate * 1.143 * 2.10
-                            else:
-                                multiplier = usdinr_rate * 1.143
-                            
-                            for col in ['Open', 'High', 'Low', 'Close']:
-                                if col in df.columns:
-                                    df[col] = df[col] * multiplier
-                            return df, s
-
                 df = yf.Ticker(s).history(period="3mo", interval="1d")
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 df = df.dropna()
+                
                 if len(df) >= 12:
+                    if is_mcx:
+                        try:
+                            usdinr_df = yf.Ticker("USDINR=X").history(period="5d", interval="1d")
+                            if isinstance(usdinr_df.columns, pd.MultiIndex):
+                                usdinr_df.columns = usdinr_df.columns.get_level_values(0)
+                            usdinr_df = usdinr_df.dropna()
+                            
+                            if not usdinr_df.empty:
+                                usdinr_rate = float(usdinr_df['Close'].iloc[-1])
+                                
+                                if "GOLD" in clean_sym:
+                                    multiplier = (1 / 31.1035) * 10 * usdinr_rate * 1.143
+                                elif "SILVER" in clean_sym:
+                                    multiplier = (1 / 31.1035) * 1000 * usdinr_rate * 1.143
+                                elif "CRUDE" in clean_sym:
+                                    multiplier = usdinr_rate * 1.143 * 1.35
+                                elif "NATURAL" in clean_sym:
+                                    multiplier = usdinr_rate * 1.143 * 2.10
+                                else:
+                                    multiplier = usdinr_rate * 1.143
+                                
+                                for col in ['Open', 'High', 'Low', 'Close']:
+                                    if col in df.columns:
+                                        df[col] = df[col] * multiplier
+                        except Exception as ex:
+                            logging.error(f"MCX Currency Conversion Error: {ex}")
+                    
                     return df, s
             except Exception:
                 continue
