@@ -354,10 +354,11 @@ def fetch_data(symbol):
         sym_u = symbol.upper().strip()
         clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").strip()
         
+        # ग्लोबल गोल्ड और सिल्वर के लिए सटीक और मजबूत सिंबल मैपिंग
         if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
-            resolved = "XAUUSD=X"
+            resolved = "GC=F" # कॉमेक्स गोल्ड फ्यूचर (जो XAUUSD का सबसे सटीक और स्टेबल डेटा देता है)
         elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
-            resolved = "XAGUSD=X"
+            resolved = "SI=F" # कॉमेक्स सिल्वर फ्यूचर
         elif "GLOBAL CRUDE" in clean_sym:
             resolved = "CL=F"
         elif "GLOBAL NATURAL" in clean_sym:
