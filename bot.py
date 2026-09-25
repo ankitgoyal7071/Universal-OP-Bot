@@ -84,7 +84,8 @@ def is_vip_user(user_id):
 
 def validate_market_access(symbol=""):
     sym_upper = symbol.upper()
-    if "BTC" in sym_upper or "ETH" in sym_upper or "BITCOIN" in sym_upper or "ETHEREUM" in sym_upper or "-USD" in sym_upper:
+    # Crypto, Forex (XAUUSD) & Global assets trade 24/7, bypass restrictions
+    if any(x in sym_upper for x in ["BTC", "ETH", "XAU", "XAG", "USD", "-X", "-USD"]):
         return True, ""
 
     ist = pytz.timezone('Asia/Kolkata')
@@ -210,10 +211,16 @@ ALIAS_MAP = {
     "SENSEX": "^BSESN",
     "BANKEX": "BSEBK.BO",
     "MCX": "MCX.NS",
-    "GOLD": "GC=F",
-    "SILVER": "SI=F",
-    "CRUDE": "CL=F",
-    "NATURALGAS": "NG=F",
+    "MCX GOLD": "GC=F",
+    "MCX SILVER": "SI=F",
+    "CRUDE OIL": "CL=F",
+    "NATURAL GAS": "NG=F",
+    "SPOT GOLD (XAUUSD)": "XAUUSD=X",
+    "XAUUSD": "XAUUSD=X",
+    "SPOT SILVER (XAGUSD)": "XAGUSD=X",
+    "XAGUSD": "XAGUSD=X",
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
     "BTC": "BTC-USD",
     "BITCOIN": "BTC-USD",
     "ETH": "ETH-USD",
@@ -234,8 +241,8 @@ def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("🥇 Commodity Tab")],
-        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("📖 How to Use? (गाइड)")]
+        [KeyboardButton("💱 Forex Tab"), KeyboardButton("🪙 Crypto Tab")],
+        [KeyboardButton("👥 VIP Referral Link"), KeyboardButton("📖 How to Use? (गाइड)")]
     ], resize_keyboard=True)
 
 def get_op_levels_keyboard():
@@ -249,6 +256,13 @@ def get_commodity_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("🥇 MCX GOLD"), KeyboardButton("🥈 MCX SILVER")],
         [KeyboardButton("🛢️ CRUDE OIL"), KeyboardButton("🔥 NATURAL GAS")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+def get_forex_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("💱 SPOT GOLD (XAUUSD)"), KeyboardButton("💱 SPOT SILVER (XAGUSD)")],
+        [KeyboardButton("💶 EUR/USD"), KeyboardButton("💷 GBP/USD")],
         [KeyboardButton("🔙 Main Menu")]
     ], resize_keyboard=True)
 
@@ -356,17 +370,21 @@ def calculate_op_levels(df, symbol):
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
-        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").strip()
+        clean_sym = sym_u.replace("📊", "").replace("📈", "").replace("🪙", "").replace("💱", "").replace("⚡", "").replace("🥇", "").replace("🥈", "").replace("🛢️", "").replace("🔥", "").replace("💶", "").replace("💷", "").strip()
         
-        # स्मार्ट मैपिंग ताकि कमोडिटी और क्रिप्टो के नाम सीधे कैच हो जाएं
-        if "GOLD" in clean_sym:
-            clean_sym = "GOLD"
-        elif "SILVER" in clean_sym:
-            clean_sym = "SILVER"
+        # स्मार्ट मैपिंग
+        if "XAU" in clean_sym or "SPOT GOLD" in clean_sym:
+            clean_sym = "XAUUSD"
+        elif "XAG" in clean_sym or "SPOT SILVER" in clean_sym:
+            clean_sym = "XAGUSD"
+        elif "MCX GOLD" in clean_sym or clean_sym == "GOLD":
+            clean_sym = "MCX GOLD"
+        elif "MCX SILVER" in clean_sym or clean_sym == "SILVER":
+            clean_sym = "MCX SILVER"
         elif "CRUDE" in clean_sym:
-            clean_sym = "CRUDE"
+            clean_sym = "CRUDE OIL"
         elif "NATURAL" in clean_sym:
-            clean_sym = "NATURALGAS"
+            clean_sym = "NATURAL GAS"
         elif "BITCOIN" in clean_sym or clean_sym == "BTC":
             clean_sym = "BTC"
         elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
@@ -375,7 +393,7 @@ def fetch_data(symbol):
         resolved = ALIAS_MAP.get(clean_sym, clean_sym)
         candidates = [resolved]
         if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
-            candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD"])
+            candidates.extend([f"{resolved}.NS", f"{resolved}.BO", f"{resolved}-USD", f"{resolved}=X"])
 
         for s in candidates:
             try:
@@ -443,7 +461,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
-        "नीचे दिए गए मेनू से विकल्प चुनें या स्टॉक/क्रिप्टो नाम (जैसे RELIANCE, BTC, ETH) टाइप करें:",
+        "नीचे दिए गए मेनू से विकल्प चुनें या स्टॉक/फॉरेक्स/क्रिप्टो नाम (जैसे RELIANCE, XAUUSD, BTC) टाइप करें:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
@@ -469,6 +487,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("सूचकांक (Index) चुनें:", reply_markup=get_op_levels_keyboard())
         return
 
+    elif text == "🥇 Commodity Tab":
+        await update.message.reply_text("कमोडिटी (MCX India) चुनें:", reply_markup=get_commodity_keyboard())
+        return
+
+    elif text == "💱 Forex Tab":
+        await update.message.reply_text("फॉरेक्स & ग्लोबल (XAUUSD / Spot) चुनें:", reply_markup=get_forex_keyboard())
+        return
+
     elif text == "🪙 Crypto Tab":
         await update.message.reply_text("क्रिप्टोकरेंसी चुनें (24/7 Live):", reply_markup=get_crypto_keyboard())
         return
@@ -482,10 +508,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📅 Economic Calendar":
         calendar_msg = get_economic_calendar()
         await update.message.reply_text(calendar_msg, parse_mode="HTML")
-        return
-
-    elif text == "🥇 Commodity Tab":
-        await update.message.reply_text("कमोडिटी चुनें:", reply_markup=get_commodity_keyboard())
         return
 
     elif text == "👥 VIP Referral Link":
@@ -509,17 +531,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📖 How to Use? (गाइड)":
         guide_text = (
             "📖 <b>How to Use Pro Bot:</b>\n\n"
-            "1. <b>OP Levels / Stocks:</b> Nifty/BankNifty या कोई भी स्टॉक (जैसे RELIANCE, TCS) सीधे टाइप करें।\n"
-            "2. <b>🪙 Crypto Tab:</b> Bitcoin (BTC) और Ethereum (ETH) के 24/7 लेवल्स चेक करें।\n"
-            "3. <b>🏛️ FII/DII Data:</b> Check institutional cash activity.\n"
-            "4. <b>📅 Economic Calendar:</b> Check macro events.\n"
-            "5. <b>🥇 Commodity Tab:</b> Gold, Silver, Crude, Natural Gas."
+            "1. <b>OP Levels / Stocks:</b> Nifty या कोई भी स्टॉक (जैसे RELIANCE) सीधे टाइप करें।\n"
+            "2. <b>🥇 Commodity Tab:</b> भारतीय MCX Gold, Silver, Crude, Natural Gas.\n"
+            "3. <b>💱 Forex Tab:</b> ग्लोबल Spot Gold (XAUUSD), Spot Silver (XAGUSD), EUR/USD.\n"
+            "4. <b>🪙 Crypto Tab:</b> Bitcoin (BTC) और Ethereum (ETH)।"
         )
         await update.message.reply_text(guide_text, parse_mode="HTML")
         return
 
     elif text in ["📊 NIFTY 50", "📈 BANK NIFTY", "🪙 FIN NIFTY", "⚡ SENSEX", "⚡ MIDCAP NIFTY", 
                   "🥇 MCX GOLD", "🥈 MCX SILVER", "🛢️ CRUDE OIL", "🔥 NATURAL GAS",
+                  "💱 SPOT GOLD (XAUUSD)", "💱 SPOT SILVER (XAGUSD)", "💶 EUR/USD", "💷 GBP/USD",
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
         query_sym = text
@@ -558,7 +580,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
-            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल (जैसे RELIANCE, BTC, ETH) टाइप करें।", parse_mode="HTML")
+            await msg_wait.edit_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला। सही सिंबल (जैसे RELIANCE, XAUUSD, BTC) टाइप करें।", parse_mode="HTML")
         return
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
