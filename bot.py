@@ -32,6 +32,7 @@ USERS_FILE = "bot_users.json"
 REFERRALS_FILE = "bot_referrals.json"
 BLOCKED_FILE = "bot_blocked.json"
 VIP_FILE = "bot_manual_vip.json"
+SUBSCRIPTIONS_FILE = "bot_subscriptions.json"
 
 NSE_HOLIDAYS = {
     "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20",
@@ -82,7 +83,6 @@ def save_user(user):
             user_exists = True
             break
         elif not isinstance(u, dict) and u == user_id:
-            # Handle legacy format
             user_exists = True
             
     if not user_exists:
@@ -94,6 +94,15 @@ def save_user(user):
         })
         
     save_data(USERS_FILE, users)
+
+def save_user_subscription(user_id, symbol):
+    subs = load_data(SUBSCRIPTIONS_FILE, {})
+    u_str = str(user_id)
+    if u_str not in subs:
+        subs[u_str] = []
+    if symbol not in subs[u_str]:
+        subs[u_str].append(symbol)
+        save_data(SUBSCRIPTIONS_FILE, subs)
 
 def record_referral(referrer_id, new_user_id):
     refs = load_data(REFERRALS_FILE, {})
@@ -481,6 +490,86 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
 
+# Background Target Monitoring System with Holiday/Weekend Check
+notified_today = set()
+
+def start_target_monitor(application):
+    def monitor_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(target_checker_job(application))
+    
+    t = threading.Thread(target=monitor_loop, daemon=True)
+    t.start()
+
+async def target_checker_job(application):
+    global notified_today
+    while True:
+        try:
+            ist = pytz.timezone('Asia/Kolkata')
+            now = datetime.now(ist)
+            today_str = now.strftime('%Y-%m-%d')
+            
+            if len(notified_today) > 0 and list(notified_today)[0].split("_")[0] != today_str:
+                notified_today.clear()
+
+            subs = load_data(SUBSCRIPTIONS_FILE, {})
+            if subs:
+                all_symbols = set()
+                for u_list in subs.values():
+                    for sym in u_list:
+                        all_symbols.add(sym)
+
+                for sym in all_symbols:
+                    # Skip check if market is closed or holiday for this symbol
+                    ok, _ = validate_market_access(sym)
+                    if not ok:
+                        continue
+
+                    df, resolved_s = fetch_data(sym)
+                    if df is not None and not df.empty:
+                        lvl = calculate_op_levels(df, sym)
+                        current_lcp = lvl['current_price']
+                        
+                        bt1 = lvl['bt1']
+                        bt2 = lvl['bt2']
+                        st1 = lvl['st1']
+                        st2 = lvl['st2']
+
+                        hit_msg = None
+                        target_key = None
+
+                        if current_lcp >= bt1 and f"{today_str}_{sym}_BT1" not in notified_today:
+                            hit_msg = f"🎯 <b>TARGET 1 (T1) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {bt1})!"
+                            target_key = f"{today_str}_{sym}_BT1"
+                        elif current_lcp >= bt2 and f"{today_str}_{sym}_BT2" not in notified_today:
+                            hit_msg = f"🔥 <b>TARGET 2 (T2) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {bt2})!"
+                            target_key = f"{today_str}_{sym}_BT2"
+                        elif current_lcp <= st1 and f"{today_str}_{sym}_ST1" not in notified_today:
+                            hit_msg = f"🎯 <b>TARGET 1 (T1 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 1</b> at <code>{current_lcp}</code> (Level: {st1})!"
+                            target_key = f"{today_str}_{sym}_ST1"
+                        elif current_lcp <= st2 and f"{today_str}_{sym}_ST2" not in notified_today:
+                            hit_msg = f"🔥 <b>TARGET 2 (T2 Down) HIT ALERT!</b>\n<b>{sym}</b> has hit <b>Target 2</b> at <code>{current_lcp}</code> (Level: {st2})!"
+                            target_key = f"{today_str}_{sym}_ST2"
+
+                        if hit_msg and target_key:
+                            notified_today.add(target_key)
+                            for uid_str, user_syms in subs.items():
+                                if sym in user_syms:
+                                    try:
+                                        await application.bot.send_message(
+                                            chat_id=int(uid_str),
+                                            text=hit_msg + SEBI_DISCLAIMER_TEXT,
+                                            parse_mode="HTML"
+                                        )
+                                        await asyncio.sleep(0.05)
+                                    except Exception:
+                                        pass
+        except Exception as e:
+            logging.error(f"Background Target Checker Error: {e}")
+        
+        await asyncio.sleep(60)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_user_blocked(user.id):
@@ -541,10 +630,7 @@ async def admin_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE
     today_str = now.strftime('%Y-%m-%d')
     yesterday_str = (now - timedelta(days=1)).strftime('%Y-%m-%d')
     
-    today_count = 0
-    yesterday_count = 0
-    weekly_count = 0
-    monthly_count = 0
+    today_count, yesterday_count, weekly_count, monthly_count = 0, 0, 0, 0
     
     for u in users:
         if isinstance(u, dict):
@@ -554,12 +640,10 @@ async def admin_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE
                     dt = datetime.fromisoformat(last_act_str)
                     dt_ist = dt.astimezone(ist)
                     d_str = dt_ist.strftime('%Y-%m-%d')
-                    
                     if d_str == today_str:
                         today_count += 1
                     if d_str == yesterday_str:
                         yesterday_count += 1
-                    
                     diff_days = (now - dt_ist).days
                     if diff_days <= 7:
                         weekly_count += 1
@@ -802,6 +886,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   "🪙 BITCOIN (BTC)", "🪙 ETHEREUM (ETH)"]:
         
         query_sym = text
+        # Save symbol to user's personal alert subscription list
+        save_user_subscription(user.id, query_sym)
+
         ok, err_msg = validate_market_access(query_sym)
         if not ok:
             await update.message.reply_text(err_msg, parse_mode="HTML")
@@ -822,6 +909,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         symbol_input = text.strip()
+        save_user_subscription(user.id, symbol_input)
+
         ok, err_msg = validate_market_access(symbol_input)
         if not ok:
             await update.message.reply_text(err_msg, parse_mode="HTML")
@@ -861,6 +950,9 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Start background target monitoring job with holiday checks
+    start_target_monitor(app)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("user", admin_user_activity))
@@ -873,7 +965,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with Separate User & Users commands...")
+    logging.info("Pro Bot is starting successfully with Multi-Symbol Alert & Holiday Filter...")
     app.run_polling()
 
 if __name__ == "__main__":
