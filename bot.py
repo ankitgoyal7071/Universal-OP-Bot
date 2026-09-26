@@ -472,23 +472,65 @@ def calculate_op_levels(df, symbol):
     }
 
 
+def _bybit_get_json(path_query: str):
+    """ Try multiple Bybit hosts. Prefer authenticated session if API keys exist (Render se public sometimes block hota hai; signed session more reliable). """
+    bases = [
+        "https://api.bybit.com",
+        "https://api.bytick.com",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; OPLevelsBot/1.0)",
+        "Accept": "application/json",
+    }
+    last_err = None
+
+    # 1) Authenticated HTTP via pybit if keys available
+    if BYBIT_API_KEY and BYBIT_API_SECRET:
+        try:
+            from pybit.unified_trading import HTTP as _BybitHTTP
+            sess = _BybitHTTP(
+                testnet=False,
+                api_key=BYBIT_API_KEY,
+                api_secret=BYBIT_API_SECRET,
+            )
+            if "tickers" in path_query:
+                return sess.get_tickers(category="linear", symbol="BTCUSDT")
+            if "kline" in path_query:
+                return sess.get_kline(
+                    category="linear", symbol="BTCUSDT", interval="D", limit=90
+                )
+        except Exception as e:
+            last_err = e
+            logging.warning(f"Bybit signed market fetch failed: {e}")
+
+    # 2) Public REST fallbacks
+    for base in bases:
+        url = f"{base}{path_query}"
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                return r.json()
+            last_err = f"HTTP {r.status_code} {base}"
+        except Exception as e:
+            last_err = e
+    logging.error(f"Bybit API all hosts failed: {last_err}")
+    return None
+
+
 def fetch_bybit_btc_futures_df():
-    """ BTCUSDT USDT-M linear perpetual (Bybit futures) daily OHLC + live last price. Uses public market API (no key needed). Same market jisper leverage trade hota hai. """
+    """ BTCUSDT USDT-M linear perpetual (Bybit futures) daily OHLC + live MARK price. Same contract jisper leverage / order lagta hai. """
     try:
-        # Daily klines (Bybit returns newest first)
-        k_url = (
-            "https://api.bybit.com/v5/market/kline"
-            "?category=linear&symbol=BTCUSDT&interval=D&limit=90"
+        k_data = _bybit_get_json(
+            "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=90"
         )
-        k_res = requests.get(k_url, timeout=8)
-        k_res.raise_for_status()
-        k_list = k_res.json().get("result", {}).get("list", [])
+        if not k_data:
+            return None
+        k_list = k_data.get("result", {}).get("list", [])
         if not k_list:
             return None
 
         rows = []
         for item in reversed(k_list):  # oldest → newest
-            # [startTime, open, high, low, close, volume, turnover]
             ts = int(item[0]) / 1000.0
             rows.append({
                 "Open": float(item[1]),
@@ -496,33 +538,34 @@ def fetch_bybit_btc_futures_df():
                 "Low": float(item[3]),
                 "Close": float(item[4]),
                 "Volume": float(item[5]),
+                "_ts": ts,
             })
-            rows[-1]["_ts"] = ts
 
         df = pd.DataFrame(rows)
         df.index = pd.to_datetime(df["_ts"], unit="s", utc=True)
-        df = df.drop(columns=["_ts"]).dropna()
+        df = df.drop(columns=["_ts"]).astype(float)
 
-        # Live last / mark price from ticker (more accurate for entry trigger)
-        try:
-            t_url = "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT"
-            t_res = requests.get(t_url, timeout=5)
-            if t_res.status_code == 200:
-                t_list = t_res.json().get("result", {}).get("list", [])
-                if t_list:
-                    last_p = float(t_list[0].get("lastPrice") or 0)
-                    mark_p = float(t_list[0].get("markPrice") or 0)
-                    live = last_p or mark_p
-                    if live > 0 and len(df) > 0:
-                        # Update today's close to live futures price
-                        df.iloc[-1, df.columns.get_loc("Close")] = live
-                        # Keep high/low consistent
-                        if live > float(df["High"].iloc[-1]):
-                            df.iloc[-1, df.columns.get_loc("High")] = live
-                        if live < float(df["Low"].iloc[-1]):
-                            df.iloc[-1, df.columns.get_loc("Low")] = live
-        except Exception as te:
-            logging.warning(f"Bybit ticker live price: {te}")
+        # Live MARK price (futures fair price — best for SL/entry vs last)
+        t_data = _bybit_get_json(
+            "/v5/market/tickers?category=linear&symbol=BTCUSDT"
+        )
+        live = 0.0
+        if t_data:
+            t_list = t_data.get("result", {}).get("list", [])
+            if t_list:
+                mark_p = float(t_list[0].get("markPrice") or 0)
+                last_p = float(t_list[0].get("lastPrice") or 0)
+                live = mark_p or last_p  # prefer mark for futures
+
+        if live > 0 and len(df) > 0:
+            df = df.copy()
+            i = df.index[-1]
+            df.at[i, "Close"] = live
+            if live > float(df.at[i, "High"]):
+                df.at[i, "High"] = live
+            if live < float(df.at[i, "Low"]):
+                df.at[i, "Low"] = live
+            logging.info(f"Bybit BTCUSDT futures mark/live: {live}")
 
         if len(df) >= 12:
             return df
@@ -601,10 +644,18 @@ def fetch_data(symbol):
     return None, None
 
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
+    src_line = ""
+    rs = (raw_symbol or "").upper()
+    if "BYBIT" in rs or "BTC" in (matched_symbol or "").upper() or "BITCOIN" in (matched_symbol or "").upper():
+        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Futures (linear)</code>"
     out = [
         f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
         f"📅 <code>{today_str}</code>",
-        f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
+    ]
+    if src_line:
+        out.append(src_line)
+    out += [
+        f"💰 <b>Futures LTP/Mark:</b> <code>{lvl['current_price']}</code>",
         f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
         f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n"
     ]
