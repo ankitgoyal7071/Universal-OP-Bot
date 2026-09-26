@@ -23,6 +23,8 @@ if not TELEGRAM_BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN environment variable not set!")
 
 GOLD_API_KEY = os.environ.get("GOLD_API_KEY", "").strip()
+BYBIT_API_KEY = os.environ.get("BYBIT_API_KEY", "").strip()
+BYBIT_API_SECRET = os.environ.get("BYBIT_API_SECRET", "").strip()
 
 ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
@@ -1149,3 +1151,67 @@ def main():
 
 if __name__ == "__main__":
     main()
+# --- ADMIN ONLY BYBIT FUTURES & TRAILING SL SYSTEM ---
+from telegram.ext import ConversationHandler
+
+AMOUNT, LEVERAGE = range(2)
+user_trade_settings = {"amount": 5, "leverage": 50}
+
+# 1. Admin Check ke sath Trade Start karne ka Command/Flow
+async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Yeh trading feature sirf Admin ke liye restricted hai!")
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "💰 <b>Trading Amount Set Karein:</b>\nKripya $1 se $20 ke beech apna margin amount enter karein (jaise: 5 ya 10):"
+    )
+    return AMOUNT
+
+async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amt = float(update.message.text.strip())
+        if not (1 <= amt <= 20):
+            await update.message.reply_text("⚠️ <b>Invalid Amount!</b> Kripya sirf $1 se $20 ke beech ki value dein.")
+            return AMOUNT
+            
+        context.user_data['temp_amount'] = amt
+        await update.message.reply_text(
+            f"✅ Amount Set: <b>${amt}</b>\n\n⚡ <b>Ab Leverage Enter Karein:</b>\nKripya 1x se 100x ke beech leverage enter karein (jaise: 50):"
+        )
+        return LEVERAGE
+    except ValueError:
+        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 5 ya 10).")
+        return AMOUNT
+
+async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_TRADING_ACTIVE, user_trade_settings
+    try:
+        lev = int(update.message.text.strip().replace("x", ""))
+        if not (1 <= lev <= 100):
+            await update.message.reply_text("⚠️ <b>Invalid Leverage!</b> Kripya 1 se 100 ke beech ki value dein.")
+            return LEVERAGE
+            
+        amt = context.user_data.get('temp_amount', 5)
+        user_trade_settings["amount"] = amt
+        user_trade_settings["leverage"] = lev
+        BOT_TRADING_ACTIVE = True
+        
+        total_position = amt * lev
+        await update.message.reply_text(
+            "🟢 <b>BTC FUTURES BOT STARTED SUCCESSFULLY!</b>\n\n"
+            f"• <b>Margin:</b> ${amt}\n"
+            f"• <b>Leverage:</b> {lev}x\n"
+            f"• <b>Total Position Size:</b> ${total_position}\n\n"
+            "🚀 Bot ab fresh breakout aur dynamic trailing SL ke sath active ho gaya hai!"
+        )
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 50).")
+        return LEVERAGE
+
+async def cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Setup cancel kar diya gaya hai.")
+    return ConversationHandler.END
+    
