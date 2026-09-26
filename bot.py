@@ -705,13 +705,13 @@ async def target_checker_job(application):
                                             chat_id=int(uid_str),
                                             text=hit_msg + SEBI_DISCLAIMER_TEXT,
                                             parse_mode="HTML",
-                            )
-                            await asyncio.sleep(0.05)
-                        except Exception:
-                            pass
+                                       )
+                                       await asyncio.sleep(0.05)
+                                   except Exception:
+                                       pass
 
-        if "BTC" in sym.upper():
-            check_and_manage_trade(current_lcp, lvl, user_trade_settings, exchange)
+                           if "BTC" in sym.upper():
+                              check_and_manage_trade(current_lcp, lvl, user_trade_settings, exchange)
 
 
 
