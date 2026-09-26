@@ -40,6 +40,11 @@ START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
 
+# Bybit auto-trade flags (full system defined later)
+BOT_TRADING_ACTIVE = False
+user_trade_settings = {"amount": 5.0, "leverage": 50}
+
+
 # Main tracked assets with Leverage Multipliers (Nifty/BankNifty = 1x, Gold/Crypto/Crude = 50x)
 TRACKED_ASSETS = {
     "NIFTY 50": {"leverage": 1, "unit": "Pts"},
@@ -694,25 +699,55 @@ async def target_checker_job(application):
 
                         if hit_msg and target_key:
                             notified_today.add(target_key)
-                            
+
                             if matched_asset:
                                 log_performance_profit(matched_asset, target_key, raw_points_earned)
 
                             for uid_str, user_syms in subs.items():
-                                 if sym in user_syms:
-                                   try:
-                                       await application.bot.send_message(
+                                if sym in user_syms:
+                                    try:
+                                        await application.bot.send_message(
                                             chat_id=int(uid_str),
                                             text=hit_msg + SEBI_DISCLAIMER_TEXT,
                                             parse_mode="HTML",
-                                       )
-                                       await asyncio.sleep(0.05)
-                                   except Exception:
-                                       pass
+                                        )
+                                        await asyncio.sleep(0.05)
+                                    except Exception:
+                                        pass
 
-                           if "BTC" in sym.upper():
-                              check_and_manage_trade(current_lcp, lvl, user_trade_settings, exchange)
+                            # Auto trade on Bybit when BTC target/level hits (admin only)
+                            if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
+                                try:
+                                    side = None
+                                    if "_BT" in target_key:
+                                        side = "Buy"
+                                    elif "_ST" in target_key:
+                                        side = "Sell"
+                                    if side:
+                                        trade_result = place_bybit_trade(
+                                            side=side,
+                                            current_price=current_lcp,
+                                            lvl=lvl,
+                                            settings=user_trade_settings,
+                                        )
+                                        if trade_result:
+                                            try:
+                                                await application.bot.send_message(
+                                                    chat_id=ADMIN_ID,
+                                                    text=trade_result,
+                                                    parse_mode="HTML",
+                                                )
+                                            except Exception:
+                                                pass
+                                except Exception as te:
+                                    logging.error(f"Bybit auto-trade error: {te}")
 
+            # Sleep so the monitor loop does not busy-spin
+            await asyncio.sleep(30)
+
+        except Exception as e:
+            logging.error(f"Target checker error: {e}")
+            await asyncio.sleep(30)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1127,6 +1162,239 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ आपने अभी तक चैनल जॉइन नहीं किया है!", show_alert=True)
 
+
+# --- ADMIN ONLY BYBIT FUTURES & TRAILING SL SYSTEM ---
+from telegram.ext import ConversationHandler
+
+try:
+    from pybit.unified_trading import HTTP as BybitHTTP
+except ImportError:
+    BybitHTTP = None
+    logging.warning("pybit not installed. Run: pip install pybit")
+
+AMOUNT, LEVERAGE = range(2)
+# BOT_TRADING_ACTIVE and user_trade_settings already set near top
+_active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT"}
+
+BYBIT_SYMBOL = "BTCUSDT"
+BYBIT_CATEGORY = "linear"
+
+
+def get_bybit_session():
+    """Create authenticated Bybit V5 session (linear USDT perpetuals)."""
+    if BybitHTTP is None:
+        raise RuntimeError("pybit library missing. Install with: pip install pybit")
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        raise RuntimeError("BYBIT_API_KEY / BYBIT_API_SECRET env vars not set")
+    return BybitHTTP(
+        testnet=False,
+        api_key=BYBIT_API_KEY,
+        api_secret=BYBIT_API_SECRET,
+    )
+
+
+def _round_qty(qty: float) -> str:
+    """BTCUSDT linear qty step is usually 0.001."""
+    q = max(0.001, round(qty, 3))
+    return f"{q:.3f}"
+
+
+def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict) -> str:
+    """ Place market order on Bybit BTCUSDT linear when OP level hits. side: "Buy" (long) or "Sell" (short) Uses margin amount * leverage for notional, sets TP/SL from OP levels. """
+    global _active_position
+
+    if not BOT_TRADING_ACTIVE:
+        return ""
+
+    # Avoid stacking same-side positions
+    if _active_position.get("side") == side:
+        return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL}. Skip new order."
+
+    session = get_bybit_session()
+    amount = float(settings.get("amount", 5))
+    leverage = int(settings.get("leverage", 50))
+    notional = amount * leverage  # USDT notional
+    qty = _round_qty(notional / max(current_price, 1))
+
+    # Set leverage (ignore errors if already set)
+    try:
+        session.set_leverage(
+            category=BYBIT_CATEGORY,
+            symbol=BYBIT_SYMBOL,
+            buyLeverage=str(leverage),
+            sellLeverage=str(leverage),
+        )
+    except Exception as e:
+        logging.warning(f"set_leverage: {e}")
+
+    # TP / SL from OP levels
+    if side == "Buy":
+        take_profit = str(lvl.get("bt1") or round(current_price * 1.01, 2))
+        stop_loss = str(lvl.get("s_conf") or round(current_price * 0.995, 2))
+        trailing_dist = str(max(50, round(float(lvl.get("range", 100)) * 0.15, 1)))
+    else:
+        take_profit = str(lvl.get("st1") or round(current_price * 0.99, 2))
+        stop_loss = str(lvl.get("b_conf") or round(current_price * 1.005, 2))
+        trailing_dist = str(max(50, round(float(lvl.get("range", 100)) * 0.15, 1)))
+
+    order = session.place_order(
+        category=BYBIT_CATEGORY,
+        symbol=BYBIT_SYMBOL,
+        side=side,
+        orderType="Market",
+        qty=qty,
+        timeInForce="IOC",
+        takeProfit=take_profit,
+        stopLoss=stop_loss,
+        tpTriggerBy="LastPrice",
+        slTriggerBy="LastPrice",
+        positionIdx=0,  # one-way mode
+    )
+
+    # Optional trailing stop after fill
+    try:
+        session.set_trading_stop(
+            category=BYBIT_CATEGORY,
+            symbol=BYBIT_SYMBOL,
+            trailingStop=trailing_dist,
+            tpslMode="Full",
+            positionIdx=0,
+        )
+    except Exception as e:
+        logging.warning(f"trailing stop set failed: {e}")
+
+    _active_position = {
+        "side": side,
+        "entry": current_price,
+        "qty": qty,
+        "symbol": BYBIT_SYMBOL,
+        "tp": take_profit,
+        "sl": stop_loss,
+    }
+
+    ret = order.get("retMsg", "OK") if isinstance(order, dict) else str(order)
+    return (
+        f"🤖 <b>BYBIT AUTO TRADE EXECUTED</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        f"• Symbol: <code>{BYBIT_SYMBOL}</code>\n"
+        f"• Side: <b>{side}</b>\n"
+        f"• Qty: <code>{qty}</code> BTC\n"
+        f"• Entry ~: <code>{current_price}</code>\n"
+        f"• Margin: <code>${amount}</code> | Lev: <code>{leverage}x</code>\n"
+        f"• TP: <code>{take_profit}</code>\n"
+        f"• SL: <code>{stop_loss}</code>\n"
+        f"• Trailing: <code>{trailing_dist}</code>\n"
+        f"• API: <code>{ret}</code>"
+    )
+
+
+async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text(
+            "⛔ <b>Access Denied:</b> Yeh trading feature sirf Admin ke liye restricted hai!",
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "💰 <b>Trading Amount Set Karein:</b>\n"
+        "Kripya $1 se $20 ke beech apna margin amount enter karein (jaise: 5 ya 10):",
+        parse_mode="HTML",
+    )
+    return AMOUNT
+
+
+async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amt = float(update.message.text.strip())
+        if not (1 <= amt <= 20):
+            await update.message.reply_text(
+                "⚠️ <b>Invalid Amount!</b> Kripya sirf $1 se $20 ke beech ki value dein.",
+                parse_mode="HTML",
+            )
+            return AMOUNT
+        context.user_data["temp_amount"] = amt
+        await update.message.reply_text(
+            f"✅ Amount Set: <b>${amt}</b>\n\n"
+            "⚡ <b>Ab Leverage Enter Karein:</b>\n"
+            "Kripya 1x se 100x ke beech leverage enter karein (jaise: 50):",
+            parse_mode="HTML",
+        )
+        return LEVERAGE
+    except ValueError:
+        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 5 ya 10).")
+        return AMOUNT
+
+
+async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_TRADING_ACTIVE, user_trade_settings
+    try:
+        lev = int(update.message.text.strip().replace("x", "").replace("X", ""))
+        if not (1 <= lev <= 100):
+            await update.message.reply_text(
+                "⚠️ <b>Invalid Leverage!</b> Kripya 1 se 100 ke beech ki value dein.",
+                parse_mode="HTML",
+            )
+            return LEVERAGE
+
+        amt = float(context.user_data.get("temp_amount", 5))
+        user_trade_settings["amount"] = amt
+        user_trade_settings["leverage"] = lev
+        BOT_TRADING_ACTIVE = True
+
+        total_position = amt * lev
+        keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
+        await update.message.reply_text(
+            "🟢 <b>BTC FUTURES BOT STARTED SUCCESSFULLY!</b>\n\n"
+            f"• <b>Margin:</b> ${amt}\n"
+            f"• <b>Leverage:</b> {lev}x\n"
+            f"• <b>Total Position Size:</b> ${total_position}\n"
+            f"• <b>Bybit API Keys:</b> {'✅ Set' if keys_ok else '❌ Missing (set BYBIT_API_KEY & SECRET)'}\n\n"
+            "🚀 Bot ab OP Level / Target hit par automatic market order + TP/SL + trailing SL lagayega.\n"
+            "Band karne ke liye: /stoptrade",
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 50).")
+        return LEVERAGE
+
+
+async def cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Setup cancel kar diya gaya hai.")
+    return ConversationHandler.END
+
+
+async def stop_trading_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_TRADING_ACTIVE
+    if update.effective_user.id != ADMIN_ID:
+        return
+    BOT_TRADING_ACTIVE = False
+    await update.message.reply_text(
+        "🛑 <b>Auto-trading STOPPED.</b> Naye orders nahi lagenge.",
+        parse_mode="HTML",
+    )
+
+
+async def trade_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    status = "🟢 ACTIVE" if BOT_TRADING_ACTIVE else "🔴 OFF"
+    pos = _active_position
+    await update.message.reply_text(
+        f"📊 <b>Bybit Auto-Trade Status</b>\n"
+        f"• Engine: {status}\n"
+        f"• Margin: ${user_trade_settings.get('amount')}\n"
+        f"• Leverage: {user_trade_settings.get('leverage')}x\n"
+        f"• Last side: {pos.get('side')}\n"
+        f"• Last entry: {pos.get('entry')}\n"
+        f"• Qty: {pos.get('qty')}",
+        parse_mode="HTML",
+    )
+
+
+
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
 
@@ -1144,75 +1412,24 @@ def main():
     app.add_handler(CommandHandler("block", admin_block))
     app.add_handler(CommandHandler("unblock", admin_unblock))
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
+    app.add_handler(CommandHandler("stoptrade", stop_trading_cmd))
+    app.add_handler(CommandHandler("tradestatus", trade_status_cmd))
+
+    trade_conv = ConversationHandler(
+        entry_points=[CommandHandler("trade", start_trading_flow)],
+        states={
+            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)],
+            LEVERAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_leverage)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_flow)],
+    )
+    app.add_handler(trade_conv)
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    logging.info("Pro Bot is starting successfully with stable yfinance feed...")
+    logging.info("Pro Bot is starting successfully with stable yfinance feed + Bybit auto-trade...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-# --- ADMIN ONLY BYBIT FUTURES & TRAILING SL SYSTEM ---
-from telegram.ext import ConversationHandler
-
-AMOUNT, LEVERAGE = range(2)
-user_trade_settings = {"amount": 5, "leverage": 50}
-
-# 1. Admin Check ke sath Trade Start karne ka Command/Flow
-async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("⛔ <b>Access Denied:</b> Yeh trading feature sirf Admin ke liye restricted hai!")
-        return ConversationHandler.END
-    
-    await update.message.reply_text(
-        "💰 <b>Trading Amount Set Karein:</b>\nKripya $1 se $20 ke beech apna margin amount enter karein (jaise: 5 ya 10):"
-    )
-    return AMOUNT
-
-async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amt = float(update.message.text.strip())
-        if not (1 <= amt <= 20):
-            await update.message.reply_text("⚠️ <b>Invalid Amount!</b> Kripya sirf $1 se $20 ke beech ki value dein.")
-            return AMOUNT
-            
-        context.user_data['temp_amount'] = amt
-        await update.message.reply_text(
-            f"✅ Amount Set: <b>${amt}</b>\n\n⚡ <b>Ab Leverage Enter Karein:</b>\nKripya 1x se 100x ke beech leverage enter karein (jaise: 50):"
-        )
-        return LEVERAGE
-    except ValueError:
-        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 5 ya 10).")
-        return AMOUNT
-
-async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_TRADING_ACTIVE, user_trade_settings
-    try:
-        lev = int(update.message.text.strip().replace("x", ""))
-        if not (1 <= lev <= 100):
-            await update.message.reply_text("⚠️ <b>Invalid Leverage!</b> Kripya 1 se 100 ke beech ki value dein.")
-            return LEVERAGE
-            
-        amt = context.user_data.get('temp_amount', 5)
-        user_trade_settings["amount"] = amt
-        user_trade_settings["leverage"] = lev
-        BOT_TRADING_ACTIVE = True
-        
-        total_position = amt * lev
-        await update.message.reply_text(
-            "🟢 <b>BTC FUTURES BOT STARTED SUCCESSFULLY!</b>\n\n"
-            f"• <b>Margin:</b> ${amt}\n"
-            f"• <b>Leverage:</b> {lev}x\n"
-            f"• <b>Total Position Size:</b> ${total_position}\n\n"
-            "🚀 Bot ab fresh breakout aur dynamic trailing SL ke sath active ho gaya hai!"
-        )
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 50).")
-        return LEVERAGE
-
-async def cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Setup cancel kar diya gaya hai.")
-    return ConversationHandler.END
-    
