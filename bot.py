@@ -698,13 +698,13 @@ async def target_checker_job(application):
                             if matched_asset:
                                 log_performance_profit(matched_asset, target_key, raw_points_earned)
 
-                                            for uid_str, user_syms in subs.items():
-                    if sym in user_syms:
-                        try:
-                            await application.bot.send_message(
-                                chat_id=int(uid_str),
-                                text=hit_msg + SEBI_DISCLAIMER_TEXT,
-                                parse_mode="HTML",
+                            for uid_str, user_syms in subs.items():
+                                 if sym in user_syms:
+                                   try:
+                                       await application.bot.send_message(
+                                            chat_id=int(uid_str),
+                                            text=hit_msg + SEBI_DISCLAIMER_TEXT,
+                                            parse_mode="HTML",
                             )
                             await asyncio.sleep(0.05)
                         except Exception:
