@@ -471,6 +471,66 @@ def calculate_op_levels(df, symbol):
         **targets
     }
 
+
+def fetch_bybit_btc_futures_df():
+    """ BTCUSDT USDT-M linear perpetual (Bybit futures) daily OHLC + live last price. Uses public market API (no key needed). Same market jisper leverage trade hota hai. """
+    try:
+        # Daily klines (Bybit returns newest first)
+        k_url = (
+            "https://api.bybit.com/v5/market/kline"
+            "?category=linear&symbol=BTCUSDT&interval=D&limit=90"
+        )
+        k_res = requests.get(k_url, timeout=8)
+        k_res.raise_for_status()
+        k_list = k_res.json().get("result", {}).get("list", [])
+        if not k_list:
+            return None
+
+        rows = []
+        for item in reversed(k_list):  # oldest → newest
+            # [startTime, open, high, low, close, volume, turnover]
+            ts = int(item[0]) / 1000.0
+            rows.append({
+                "Open": float(item[1]),
+                "High": float(item[2]),
+                "Low": float(item[3]),
+                "Close": float(item[4]),
+                "Volume": float(item[5]),
+            })
+            rows[-1]["_ts"] = ts
+
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df["_ts"], unit="s", utc=True)
+        df = df.drop(columns=["_ts"]).dropna()
+
+        # Live last / mark price from ticker (more accurate for entry trigger)
+        try:
+            t_url = "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT"
+            t_res = requests.get(t_url, timeout=5)
+            if t_res.status_code == 200:
+                t_list = t_res.json().get("result", {}).get("list", [])
+                if t_list:
+                    last_p = float(t_list[0].get("lastPrice") or 0)
+                    mark_p = float(t_list[0].get("markPrice") or 0)
+                    live = last_p or mark_p
+                    if live > 0 and len(df) > 0:
+                        # Update today's close to live futures price
+                        df.iloc[-1, df.columns.get_loc("Close")] = live
+                        # Keep high/low consistent
+                        if live > float(df["High"].iloc[-1]):
+                            df.iloc[-1, df.columns.get_loc("High")] = live
+                        if live < float(df["Low"].iloc[-1]):
+                            df.iloc[-1, df.columns.get_loc("Low")] = live
+        except Exception as te:
+            logging.warning(f"Bybit ticker live price: {te}")
+
+        if len(df) >= 12:
+            return df
+    except Exception as e:
+        logging.error(f"Bybit BTC futures fetch error: {e}")
+    return None
+
+
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
@@ -488,7 +548,11 @@ def fetch_data(symbol):
         elif "GLOBAL NATURAL" in clean_sym:
             resolved = "NG=F"
         elif "BITCOIN" in clean_sym or clean_sym == "BTC":
-            resolved = "BTC-USD"
+            # Prefer Bybit BTCUSDT linear futures (same market as leveraged trade)
+            bybit_df = fetch_bybit_btc_futures_df()
+            if bybit_df is not None and len(bybit_df) >= 12:
+                return bybit_df, "BYBIT:BTCUSDT"
+            resolved = "BTC-USD"  # fallback yfinance
         elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
             resolved = "ETH-USD"
         else:
@@ -715,32 +779,54 @@ async def target_checker_job(application):
                                     except Exception:
                                         pass
 
-                            # Auto trade on Bybit when BTC target/level hits (admin only)
-                            if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
-                                try:
-                                    side = None
-                                    if "_BT" in target_key:
-                                        side = "Buy"
-                                    elif "_ST" in target_key:
-                                        side = "Sell"
-                                    if side:
-                                        trade_result = place_bybit_trade(
-                                            side=side,
-                                            current_price=current_lcp,
-                                            lvl=lvl,
-                                            settings=user_trade_settings,
-                                        )
-                                        if trade_result:
-                                            try:
-                                                await application.bot.send_message(
-                                                    chat_id=ADMIN_ID,
-                                                    text=trade_result,
-                                                    parse_mode="HTML",
-                                                )
-                                            except Exception:
-                                                pass
-                                except Exception as te:
-                                    logging.error(f"Bybit auto-trade error: {te}")
+                        # ===== AUTO TRADE BTC: Entry b_conf/s_conf + midpoint SL + T1-T10 trail =====
+                        if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
+                            try:
+                                trade_side = None
+                                entry_key = None
+
+                                # LONG when price reaches Buy Above Confirm (b_conf)
+                                if current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
+                                    trade_side = "Buy"
+                                    entry_key = f"{today_str}_{sym}_ENTRY_LONG"
+
+                                # SHORT when price reaches Sell Below Confirm (s_conf)
+                                elif current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
+                                    trade_side = "Sell"
+                                    entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
+
+                                if trade_side and entry_key:
+                                    notified_today.add(entry_key)
+                                    trade_result = place_bybit_trade(
+                                        side=trade_side,
+                                        current_price=current_lcp,
+                                        lvl=lvl,
+                                        settings=user_trade_settings,
+                                    )
+                                    if trade_result:
+                                        try:
+                                            await application.bot.send_message(
+                                                chat_id=ADMIN_ID,
+                                                text=trade_result,
+                                                parse_mode="HTML",
+                                            )
+                                        except Exception:
+                                            pass
+
+                                # While position open → update trailing SL (T2→T1 ... T10)
+                                if _active_position.get("side"):
+                                    trail_msg = manage_open_position_trail(current_lcp)
+                                    if trail_msg:
+                                        try:
+                                            await application.bot.send_message(
+                                                chat_id=ADMIN_ID,
+                                                text=trail_msg,
+                                                parse_mode="HTML",
+                                            )
+                                        except Exception:
+                                            pass
+                            except Exception as te:
+                                logging.error(f"Bybit auto-trade error: {te}")
 
             # Sleep so the monitor loop does not busy-spin
             await asyncio.sleep(30)
@@ -1174,7 +1260,16 @@ except ImportError:
 
 AMOUNT, LEVERAGE = range(2)
 # BOT_TRADING_ACTIVE and user_trade_settings already set near top
-_active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT"}
+_active_position = {
+    "side": None,
+    "entry": None,
+    "qty": None,
+    "symbol": "BTCUSDT",
+    "sl": None,
+    "trail_level": 0,  # last target index used for SL trail (0 = midpoint)
+    "mid_sl": None,
+    "levels": None,    # snapshot of bt1..bt10 / st1..st10 at entry
+}
 
 BYBIT_SYMBOL = "BTCUSDT"
 BYBIT_CATEGORY = "linear"
@@ -1199,24 +1294,102 @@ def _round_qty(qty: float) -> str:
     return f"{q:.3f}"
 
 
+def _midpoint_sl(lvl: dict) -> float:
+    b = float(lvl.get("b_conf") or 0)
+    s = float(lvl.get("s_conf") or 0)
+    if b and s:
+        return round((b + s) / 2.0, 2)
+    return round(float(lvl.get("current_price") or 0) * 0.995, 2)
+
+
+def _snapshot_levels(lvl: dict) -> dict:
+    """Store T1..T10 both sides from OP levels at entry time."""
+    out = {"bt": {}, "st": {}}
+    for i in range(1, 11):
+        out["bt"][i] = float(lvl.get(f"bt{i}") or 0)
+        out["st"][i] = float(lvl.get(f"st{i}") or 0)
+    out["b_conf"] = float(lvl.get("b_conf") or 0)
+    out["s_conf"] = float(lvl.get("s_conf") or 0)
+    out["mid"] = _midpoint_sl(lvl)
+    return out
+
+
+def compute_trail_sl(side: str, price: float, levels: dict, current_sl: float) -> tuple:
+    """ Trailing rule (user logic): - Initial SL = midpoint (b_conf + s_conf) / 2 - At T1 / ST1: SL stays midpoint - When price hits Tn (n>=2): SL moves to T(n-1) - When price goes beyond T10 / ST10: SL locks at T10 / ST10 Returns (new_sl, trail_level_index) """
+    mid = float(levels.get("mid") or current_sl)
+    new_sl = mid
+    trail_lvl = 0
+
+    if side == "Buy":
+        bt = levels.get("bt") or {}
+        # n from 2..10: if price >= Tn → SL = T(n-1)
+        for n in range(2, 11):
+            tn = bt.get(n) or 0
+            if tn and price >= tn:
+                prev = bt.get(n - 1) or mid
+                new_sl = prev
+                trail_lvl = n - 1
+        # above T10 → lock T10
+        t10 = bt.get(10) or 0
+        if t10 and price > t10:
+            new_sl = t10
+            trail_lvl = 10
+        # only improve SL upward for long
+        if current_sl and new_sl < current_sl:
+            new_sl = current_sl
+    else:
+        st = levels.get("st") or {}
+        for n in range(2, 11):
+            tn = st.get(n) or 0
+            if tn and price <= tn:
+                prev = st.get(n - 1) or mid
+                new_sl = prev
+                trail_lvl = n - 1
+        t10 = st.get(10) or 0
+        if t10 and price < t10:
+            new_sl = t10
+            trail_lvl = 10
+        # only improve SL downward for short
+        if current_sl and new_sl > current_sl:
+            new_sl = current_sl
+
+    return round(float(new_sl), 2), trail_lvl
+
+
+def update_bybit_stop_loss(new_sl: float) -> bool:
+    """Push updated SL to Bybit for open position."""
+    try:
+        session = get_bybit_session()
+        session.set_trading_stop(
+            category=BYBIT_CATEGORY,
+            symbol=BYBIT_SYMBOL,
+            stopLoss=str(new_sl),
+            slTriggerBy="LastPrice",
+            tpslMode="Full",
+            positionIdx=0,
+        )
+        return True
+    except Exception as e:
+        logging.error(f"update_bybit_stop_loss failed: {e}")
+        return False
+
+
 def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict) -> str:
-    """ Place market order on Bybit BTCUSDT linear when OP level hits. side: "Buy" (long) or "Sell" (short) Uses margin amount * leverage for notional, sets TP/SL from OP levels. """
+    """ Entry on b_conf (Buy) / s_conf (Sell). Initial SL = midpoint of b_conf & s_conf. TP optional at T10 / ST10 (far target); main exit is trailing SL. """
     global _active_position
 
     if not BOT_TRADING_ACTIVE:
         return ""
 
-    # Avoid stacking same-side positions
     if _active_position.get("side") == side:
         return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL}. Skip new order."
 
     session = get_bybit_session()
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 50))
-    notional = amount * leverage  # USDT notional
+    notional = amount * leverage
     qty = _round_qty(notional / max(current_price, 1))
 
-    # Set leverage (ignore errors if already set)
     try:
         session.set_leverage(
             category=BYBIT_CATEGORY,
@@ -1227,15 +1400,15 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     except Exception as e:
         logging.warning(f"set_leverage: {e}")
 
-    # TP / SL from OP levels
+    levels = _snapshot_levels(lvl)
+    mid_sl = levels["mid"]
+    stop_loss = str(mid_sl)
+
+    # Far TP at T10 / ST10 (optional hard target)
     if side == "Buy":
-        take_profit = str(lvl.get("bt1") or round(current_price * 1.01, 2))
-        stop_loss = str(lvl.get("s_conf") or round(current_price * 0.995, 2))
-        trailing_dist = str(max(50, round(float(lvl.get("range", 100)) * 0.15, 1)))
+        take_profit = str(levels["bt"].get(10) or round(current_price * 1.05, 2))
     else:
-        take_profit = str(lvl.get("st1") or round(current_price * 0.99, 2))
-        stop_loss = str(lvl.get("b_conf") or round(current_price * 1.005, 2))
-        trailing_dist = str(max(50, round(float(lvl.get("range", 100)) * 0.15, 1)))
+        take_profit = str(levels["st"].get(10) or round(current_price * 0.95, 2))
 
     order = session.place_order(
         category=BYBIT_CATEGORY,
@@ -1248,28 +1421,19 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         stopLoss=stop_loss,
         tpTriggerBy="LastPrice",
         slTriggerBy="LastPrice",
-        positionIdx=0,  # one-way mode
+        positionIdx=0,
     )
-
-    # Optional trailing stop after fill
-    try:
-        session.set_trading_stop(
-            category=BYBIT_CATEGORY,
-            symbol=BYBIT_SYMBOL,
-            trailingStop=trailing_dist,
-            tpslMode="Full",
-            positionIdx=0,
-        )
-    except Exception as e:
-        logging.warning(f"trailing stop set failed: {e}")
 
     _active_position = {
         "side": side,
         "entry": current_price,
         "qty": qty,
         "symbol": BYBIT_SYMBOL,
+        "sl": mid_sl,
+        "trail_level": 0,
+        "mid_sl": mid_sl,
+        "levels": levels,
         "tp": take_profit,
-        "sl": stop_loss,
     }
 
     ret = order.get("retMsg", "OK") if isinstance(order, dict) else str(order)
@@ -1281,11 +1445,41 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         f"• Qty: <code>{qty}</code> BTC\n"
         f"• Entry ~: <code>{current_price}</code>\n"
         f"• Margin: <code>${amount}</code> | Lev: <code>{leverage}x</code>\n"
-        f"• TP: <code>{take_profit}</code>\n"
-        f"• SL: <code>{stop_loss}</code>\n"
-        f"• Trailing: <code>{trailing_dist}</code>\n"
+        f"• Initial SL (midpoint): <code>{mid_sl}</code>\n"
+        f"• TP (T10): <code>{take_profit}</code>\n"
+        f"• Trail: T2→T1 … T10→T9, above T10→T10 lock\n"
         f"• API: <code>{ret}</code>"
     )
+
+
+def manage_open_position_trail(current_price: float, application_bot=None) -> str:
+    """ Called every monitor loop while a BTC position is open. Moves SL as price crosses T2..T10 (or ST2..ST10). """
+    global _active_position
+    side = _active_position.get("side")
+    levels = _active_position.get("levels")
+    if not side or not levels:
+        return ""
+
+    old_sl = float(_active_position.get("sl") or levels.get("mid") or 0)
+    new_sl, trail_lvl = compute_trail_sl(side, current_price, levels, old_sl)
+
+    if abs(new_sl - old_sl) < 0.01:
+        return ""  # no change
+
+    ok = update_bybit_stop_loss(new_sl)
+    if not ok:
+        return f"⚠️ Trail SL update failed → tried {new_sl}"
+
+    _active_position["sl"] = new_sl
+    _active_position["trail_level"] = trail_lvl
+    return (
+        f"🔄 <b>TRAILING SL UPDATED</b>\n"
+        f"• Side: <b>{side}</b>\n"
+        f"• Price: <code>{current_price}</code>\n"
+        f"• New SL: <code>{new_sl}</code>\n"
+        f"• Trail level: <code>T{trail_lvl if trail_lvl else 'mid'}</code>"
+    )
+
 
 
 async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1351,7 +1545,9 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• <b>Leverage:</b> {lev}x\n"
             f"• <b>Total Position Size:</b> ${total_position}\n"
             f"• <b>Bybit API Keys:</b> {'✅ Set' if keys_ok else '❌ Missing (set BYBIT_API_KEY & SECRET)'}\n\n"
-            "🚀 Bot ab OP Level / Target hit par automatic market order + TP/SL + trailing SL lagayega.\n"
+            "🚀 Bot ab <b>Buy Above Confirm</b> / <b>Sell Below Confirm</b> pe entry lega.\n"
+            "• Initial SL = midpoint (b_conf + s_conf)/2\n"
+            "• Trail: T2→T1 … T10→T9, above T10→T10 lock (SHORT same)\n\n"
             "Band karne ke liye: /stoptrade",
             parse_mode="HTML",
         )
