@@ -708,10 +708,10 @@ async def target_checker_job(application):
                                         )
                                         await asyncio.sleep(0.05)
                                    
-         except Exception:
-           pass
+except Exception:
+     pass 
 
-if "BTC" in sym.upper() or "BITCOIN" in sym.upper():
+if "BTC" in sym.upper():
     check_and_manage_trade(current_lcp, lvl, user_trade_settings, exchange)
        
 
