@@ -707,12 +707,14 @@ async def target_checker_job(application):
                                             parse_mode="HTML"
                                         )
                                         await asyncio.sleep(0.05)
-                                    except Exception:
-                                        pass
-        except Exception as e:
-            logging.error(f"Background Target Checker Error: {e}")
-        
-        await asyncio.sleep(60)
+                                   
+         except Exception:
+           pass
+
+if "BTC" in sym.upper() or "BITCOIN" in sym.upper():
+    check_and_manage_trade(current_lcp, lvl, user_trade_settings, exchange)
+       
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
