@@ -473,7 +473,10 @@ def calculate_op_levels(df, symbol):
 
 
 def _bybit_get_json(path_query: str):
-    """ Try multiple Bybit hosts. Prefer authenticated session if API keys exist (Render se public sometimes block hota hai; signed session more reliable). """
+    """
+    Try multiple Bybit hosts. Prefer authenticated session if API keys exist
+    (Render se public sometimes block hota hai; signed session more reliable).
+    """
     bases = [
         "https://api.bybit.com",
         "https://api.bytick.com",
@@ -496,8 +499,19 @@ def _bybit_get_json(path_query: str):
             if "tickers" in path_query:
                 return sess.get_tickers(category="linear", symbol="BTCUSDT")
             if "kline" in path_query:
+                # parse interval/limit from query if present
+                interval, limit = "D", 90
+                if "interval=60" in path_query:
+                    interval, limit = "60", 500
+                elif "interval=D" in path_query:
+                    interval, limit = "D", 90
+                if "limit=" in path_query:
+                    try:
+                        limit = int(path_query.split("limit=")[1].split("&")[0])
+                    except Exception:
+                        pass
                 return sess.get_kline(
-                    category="linear", symbol="BTCUSDT", interval="D", limit=90
+                    category="linear", symbol="BTCUSDT", interval=interval, limit=limit
                 )
         except Exception as e:
             last_err = e
@@ -518,19 +532,31 @@ def _bybit_get_json(path_query: str):
 
 
 def fetch_bybit_btc_futures_df():
-    """ BTCUSDT USDT-M linear perpetual (Bybit futures) daily OHLC + live MARK price. Same contract jisper leverage / order lagta hai. """
+    """
+    BTCUSDT linear perpetual OHLC built on IST calendar days (Asia/Kolkata).
+    Levels reset every night 12:00 AM IST — not UTC midnight.
+    Live Close = Bybit mark price.
+    """
     try:
+        # 1h candles → resample to IST daily (need ~20+ days → 500 hours)
         k_data = _bybit_get_json(
-            "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=90"
+            "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=60&limit=500"
         )
         if not k_data:
-            return None
-        k_list = k_data.get("result", {}).get("list", [])
+            # fallback UTC daily if hourly fails
+            k_data = _bybit_get_json(
+                "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=90"
+            )
+            use_ist = False
+        else:
+            use_ist = True
+
+        k_list = k_data.get("result", {}).get("list", []) if k_data else []
         if not k_list:
             return None
 
         rows = []
-        for item in reversed(k_list):  # oldest → newest
+        for item in reversed(k_list):
             ts = int(item[0]) / 1000.0
             rows.append({
                 "Open": float(item[1]),
@@ -545,7 +571,29 @@ def fetch_bybit_btc_futures_df():
         df.index = pd.to_datetime(df["_ts"], unit="s", utc=True)
         df = df.drop(columns=["_ts"]).astype(float)
 
-        # Live MARK price (futures fair price — best for SL/entry vs last)
+        if use_ist:
+            # Strict calendar day in IST (12:00 AM Asia/Kolkata = new day)
+            ist = pytz.timezone("Asia/Kolkata")
+            df_ist = df.tz_convert(ist)
+            day_key = pd.Series(df_ist.index.strftime("%Y-%m-%d"), index=df_ist.index)
+            daily = df_ist.groupby(day_key.values, sort=True).agg({
+                "Open": "first",
+                "High": "max",
+                "Low": "min",
+                "Close": "last",
+                "Volume": "sum",
+            })
+            daily.index = pd.to_datetime(daily.index)
+            df = daily.dropna()
+            logging.info(
+                f"Bybit BTC IST-daily: {len(df)} | day={df.index[-1].date()} "
+                f"open={float(df['Open'].iloc[-1]):.2f} "
+                f"prev_close={float(df['Close'].iloc[-2]):.2f}"
+            )
+        else:
+            logging.warning("Bybit hourly failed — using UTC daily candles")
+
+        # Live MARK price on today's IST candle
         t_data = _bybit_get_json(
             "/v5/market/tickers?category=linear&symbol=BTCUSDT"
         )
@@ -555,7 +603,7 @@ def fetch_bybit_btc_futures_df():
             if t_list:
                 mark_p = float(t_list[0].get("markPrice") or 0)
                 last_p = float(t_list[0].get("lastPrice") or 0)
-                live = mark_p or last_p  # prefer mark for futures
+                live = mark_p or last_p
 
         if live > 0 and len(df) > 0:
             df = df.copy()
@@ -646,8 +694,13 @@ def fetch_data(symbol):
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     src_line = ""
     rs = (raw_symbol or "").upper()
-    if "BYBIT" in rs or "BTC" in (matched_symbol or "").upper() or "BITCOIN" in (matched_symbol or "").upper():
-        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Futures (linear)</code>"
+    is_btc = (
+        "BYBIT" in rs
+        or "BTC" in (matched_symbol or "").upper()
+        or "BITCOIN" in (matched_symbol or "").upper()
+    )
+    if is_btc:
+        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Futures | Day reset: 12:00 AM IST</code>"
     out = [
         f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
         f"📅 <code>{today_str}</code>",
@@ -656,6 +709,15 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
         out.append(src_line)
     out += [
         f"💰 <b>Futures LTP/Mark:</b> <code>{lvl['current_price']}</code>",
+    ]
+    if is_btc and lvl.get("day_open") is not None:
+        out += [
+            f"🌅 <b>Day Open (IST):</b> <code>{lvl.get('day_open')}</code>",
+            f"📉 <b>Prev Close:</b> <code>{lvl.get('prev_close')}</code> | "
+            f"<b>H/L:</b> <code>{lvl.get('prev_high')}/{lvl.get('prev_low')}</code>",
+            f"🎯 <b>Anchor (doKdc):</b> <code>{lvl.get('doKdc')}</code>",
+        ]
+    out += [
         f"🌡️ <b>India VIX Mood:</b> <code>{lvl['market_mood']}</code>",
         f"🎯 <b>CPR Setup:</b> <code>{lvl['cpr_type']}</code>\n"
     ]
@@ -1255,7 +1317,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ist = pytz.timezone('Asia/Kolkata')
             today_str = datetime.now(ist).strftime('%Y-%m-%d')
             lvl = calculate_op_levels(df, query_sym)
-            response_text = format_color_display(text, today_str, lvl, query_sym)
+            response_text = format_color_display(text, today_str, lvl, resolved_sym or query_sym)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
             await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
@@ -1277,7 +1339,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ist = pytz.timezone('Asia/Kolkata')
             today_str = datetime.now(ist).strftime('%Y-%m-%d')
             lvl = calculate_op_levels(df, symbol_input)
-            response_text = format_color_display(symbol_input, today_str, lvl, symbol_input)
+            response_text = format_color_display(symbol_input, today_str, lvl, resolved_sym or symbol_input)
             await msg_wait.edit_text(response_text, parse_mode="HTML")
         else:
             await msg_wait.reply_text(f"❌ <b>Error:</b> '{symbol_input}' का डाटा नहीं मिला।", parse_mode="HTML")
@@ -1366,7 +1428,14 @@ def _snapshot_levels(lvl: dict) -> dict:
 
 
 def compute_trail_sl(side: str, price: float, levels: dict, current_sl: float) -> tuple:
-    """ Trailing rule (user logic): - Initial SL = midpoint (b_conf + s_conf) / 2 - At T1 / ST1: SL stays midpoint - When price hits Tn (n>=2): SL moves to T(n-1) - When price goes beyond T10 / ST10: SL locks at T10 / ST10 Returns (new_sl, trail_level_index) """
+    """
+    Trailing rule (user logic):
+      - Initial SL = midpoint (b_conf + s_conf) / 2
+      - At T1 / ST1: SL stays midpoint
+      - When price hits Tn (n>=2): SL moves to T(n-1)
+      - When price goes beyond T10 / ST10: SL locks at T10 / ST10
+    Returns (new_sl, trail_level_index)
+    """
     mid = float(levels.get("mid") or current_sl)
     new_sl = mid
     trail_lvl = 0
@@ -1426,7 +1495,11 @@ def update_bybit_stop_loss(new_sl: float) -> bool:
 
 
 def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict) -> str:
-    """ Entry on b_conf (Buy) / s_conf (Sell). Initial SL = midpoint of b_conf & s_conf. TP optional at T10 / ST10 (far target); main exit is trailing SL. """
+    """
+    Entry on b_conf (Buy) / s_conf (Sell).
+    Initial SL = midpoint of b_conf & s_conf.
+    TP optional at T10 / ST10 (far target); main exit is trailing SL.
+    """
     global _active_position
 
     if not BOT_TRADING_ACTIVE:
@@ -1504,7 +1577,10 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
 
 def manage_open_position_trail(current_price: float, application_bot=None) -> str:
-    """ Called every monitor loop while a BTC position is open. Moves SL as price crosses T2..T10 (or ST2..ST10). """
+    """
+    Called every monitor loop while a BTC position is open.
+    Moves SL as price crosses T2..T10 (or ST2..ST10).
+    """
     global _active_position
     side = _active_position.get("side")
     levels = _active_position.get("levels")
@@ -1680,3 +1756,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
