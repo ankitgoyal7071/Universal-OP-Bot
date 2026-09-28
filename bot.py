@@ -585,14 +585,13 @@ def get_bybit_btc_live_price():
 
 def fetch_bybit_btc_futures_df():
     """
-    Build daily OHLC on IST calendar dates explicitly.
-    Today row is ALWAYS today IST (12:00 AM → now), even if API daily bar lag kare.
-    Yesterday row is the previous completed IST day.
+    Build daily OHLC on UTC calendar (TradingView / Bybit daily).
+    New day = 00:00 UTC = 5:30 AM IST.
     """
     try:
-        ist = pytz.timezone("Asia/Kolkata")
-        now_ist = datetime.now(ist)
-        today = now_ist.date()
+        utc = pytz.UTC
+        now_utc = datetime.now(utc)
+        today = now_utc.date()
 
         k_data = _bybit_get_json(
             "/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=500"
@@ -605,7 +604,7 @@ def fetch_bybit_btc_futures_df():
 
         rows = []
         for item in k_list:
-            ts = datetime.fromtimestamp(int(item[0]) / 1000.0, tz=pytz.UTC).astimezone(ist)
+            ts = datetime.fromtimestamp(int(item[0]) / 1000.0, tz=pytz.UTC)
             rows.append({
                 "ts": ts,
                 "day": ts.date(),
@@ -829,7 +828,7 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
         or "BITCOIN" in (matched_symbol or "").upper()
     )
     if is_btc:
-        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Spot | Day reset: 12:00 AM IST</code>"
+        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT | Day reset: 5:30 AM IST (00:00 UTC / TradingView)</code>"
     out = [
         f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
         f"📅 <code>{today_str}</code>",
@@ -1861,11 +1860,12 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 20))
     leverage = max(1, min(150, leverage))
-    notional = round(max(amount, 10.0) * leverage, 2)
     px = max(float(current_price or 0), 1.0)
-    # Linear BTCUSDT qty = BTC. Min ~0.001
-    btc_qty = max(0.001, round(notional / px, 3))
+    # Qty in BTC (min 0.001). Not a fixed dollar size — follows price.
+    btc_qty = float(settings.get("btc_qty") or 0.001)
+    btc_qty = max(0.001, round(btc_qty, 3))
     qty = f"{btc_qty:.3f}"
+    notional = round(btc_qty * px, 2)
 
     try:
         bybit_signed_request("POST", "/v5/position/switch-isolated", {
