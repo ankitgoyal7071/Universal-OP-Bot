@@ -46,7 +46,7 @@ WAITING_FOR_HELP = set()
 # Bybit auto-trade flags (persisted so Render restart pe OFF na ho)
 TRADE_STATE_FILE = "bot_trade_state.json"
 BOT_TRADING_ACTIVE = False
-user_trade_settings = {"amount": 5.0, "leverage": 50}
+user_trade_settings = {"amount": 10.0, "leverage": 20}
 
 def load_trade_state():
     global BOT_TRADING_ACTIVE, user_trade_settings
@@ -1811,14 +1811,24 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL}. Skip new order."
 
     amount = float(settings.get("amount", 5))
-    leverage = int(settings.get("leverage", 10))
-    leverage = max(1, min(10, leverage))
+    leverage = int(settings.get("leverage", 20))
+    leverage = max(1, min(100, leverage))
     notional = round(max(amount, 10.0) * leverage, 2)
     px = max(float(current_price or 0), 1.0)
     # Linear BTCUSDT qty = BTC. Min ~0.001
     btc_qty = max(0.001, round(notional / px, 3))
     qty = f"{btc_qty:.3f}"
 
+    try:
+        bybit_signed_request("POST", "/v5/position/switch-isolated", {
+            "category": BYBIT_CATEGORY,
+            "symbol": BYBIT_SYMBOL,
+            "tradeMode": 1,
+            "buyLeverage": str(leverage),
+            "sellLeverage": str(leverage),
+        })
+    except Exception as e:
+        logging.warning(f"isolated switch: {e}")
     try:
         bybit_signed_request("POST", "/v5/position/set-leverage", {
             "category": BYBIT_CATEGORY,
@@ -2126,7 +2136,7 @@ async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Amount Set: <b>${amt}</b>\n\n"
             "⚡ <b>Ab Leverage Enter Karein:</b>\n"
-            "Kripya 1x se 10x ke beech leverage enter karein (jaise: 5 ya 10):",
+            "Kripya 1x se 100x ke beech leverage enter karein (jaise: 20):",
             parse_mode="HTML",
         )
         return LEVERAGE
@@ -2139,9 +2149,9 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_TRADING_ACTIVE, user_trade_settings
     try:
         lev = int(update.message.text.strip().replace("x", "").replace("X", ""))
-        if not (1 <= lev <= 10):
+        if not (1 <= lev <= 100):
             await update.message.reply_text(
-                "⚠️ <b>Invalid Leverage!</b> Spot margin me sirf 1x se 10x allowed hai.",
+                "⚠️ <b>Invalid Leverage!</b> 1x se 100x allowed hai.",
                 parse_mode="HTML",
             )
             return LEVERAGE
@@ -2168,7 +2178,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("⚠️ Kripya 1 se 10 ke beech leverage enter karein (jaise 10).")
+        await update.message.reply_text("⚠️ Kripya 1 se 100 ke beech leverage enter karein (jaise 20).")
         return LEVERAGE
 
 
