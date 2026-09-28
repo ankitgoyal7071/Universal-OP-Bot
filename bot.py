@@ -40,9 +40,26 @@ START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
 
-# Bybit auto-trade flags (full system defined later)
+# Bybit auto-trade flags (persisted so Render restart pe OFF na ho)
+TRADE_STATE_FILE = "bot_trade_state.json"
 BOT_TRADING_ACTIVE = False
 user_trade_settings = {"amount": 5.0, "leverage": 50}
+
+def load_trade_state():
+    global BOT_TRADING_ACTIVE, user_trade_settings
+    data = load_data(TRADE_STATE_FILE, {})
+    if data:
+        BOT_TRADING_ACTIVE = bool(data.get("active", False))
+        user_trade_settings["amount"] = float(data.get("amount", user_trade_settings.get("amount", 5)))
+        user_trade_settings["leverage"] = int(data.get("leverage", user_trade_settings.get("leverage", 50)))
+    return BOT_TRADING_ACTIVE, user_trade_settings
+
+def save_trade_state():
+    save_data(TRADE_STATE_FILE, {
+        "active": bool(BOT_TRADING_ACTIVE),
+        "amount": float(user_trade_settings.get("amount", 5)),
+        "leverage": int(user_trade_settings.get("leverage", 50)),
+    })
 
 
 # Main tracked assets with Leverage Multipliers (Nifty/BankNifty = 1x, Gold/Crypto/Crude = 50x)
@@ -531,6 +548,20 @@ def _bybit_get_json(path_query: str):
     return None
 
 
+
+def get_bybit_btc_live_price():
+    """Bybit BTCUSDT linear mark/last — fast, for 1-second entry checks."""
+    data = _bybit_get_json("/v5/market/tickers?category=linear&symbol=BTCUSDT")
+    if not data:
+        return 0.0
+    lst = data.get("result", {}).get("list", [])
+    if not lst:
+        return 0.0
+    mark_p = float(lst[0].get("markPrice") or 0)
+    last_p = float(lst[0].get("lastPrice") or 0)
+    return mark_p or last_p
+
+
 def fetch_bybit_btc_futures_df():
     """
     BTCUSDT linear perpetual OHLC built on IST calendar days (Asia/Kolkata).
@@ -823,13 +854,18 @@ async def target_checker_job(application):
             if len(notified_today) > 0 and list(notified_today)[0].split("_")[0] != today_str:
                 notified_today.clear()
 
+            load_trade_state()
             subs = load_data(SUBSCRIPTIONS_FILE, {})
-            if subs:
-                all_symbols = set()
-                for u_list in subs.values():
-                    for sym in u_list:
-                        all_symbols.add(sym)
+            all_symbols = set()
+            for u_list in (subs or {}).values():
+                for sym in u_list:
+                    all_symbols.add(sym)
 
+            # Auto-trade BTC even if nobody tapped the button / after Render restart
+            if BOT_TRADING_ACTIVE:
+                all_symbols.add("🪙 BITCOIN (BTC)")
+
+            if all_symbols:
                 for sym in all_symbols:
                     ok, _ = validate_market_access(sym)
                     if not ok:
@@ -895,10 +931,12 @@ async def target_checker_job(application):
                         # ===== AUTO TRADE BTC: Entry b_conf/s_conf + midpoint SL + T1-T10 trail =====
                         if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
                             try:
+                                live_px = get_bybit_btc_live_price() or current_lcp
+                                current_lcp = live_px
                                 trade_side = None
                                 entry_key = None
 
-                                # LONG when price reaches Buy Above Confirm (b_conf)
+                                # LONG when live futures price hits Buy Above Confirm
                                 if current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
                                     entry_key = f"{today_str}_{sym}_ENTRY_LONG"
@@ -928,25 +966,37 @@ async def target_checker_job(application):
 
                                 # While position open → update trailing SL (T2→T1 ... T10)
                                 if _active_position.get("side"):
-                                    trail_msg = manage_open_position_trail(current_lcp)
-                                    if trail_msg:
+                                    close_msg = check_bybit_position_closed(current_lcp)
+                                    if close_msg:
                                         try:
                                             await application.bot.send_message(
                                                 chat_id=ADMIN_ID,
-                                                text=trail_msg,
+                                                text=close_msg,
                                                 parse_mode="HTML",
                                             )
                                         except Exception:
                                             pass
+                                    else:
+                                        trail_msg = manage_open_position_trail(current_lcp)
+                                        if trail_msg:
+                                            try:
+                                                await application.bot.send_message(
+                                                    chat_id=ADMIN_ID,
+                                                    text=trail_msg,
+                                                    parse_mode="HTML",
+                                                )
+                                            except Exception:
+                                                pass
                             except Exception as te:
                                 logging.error(f"Bybit auto-trade error: {te}")
 
-            # Sleep so the monitor loop does not busy-spin
-            await asyncio.sleep(30)
+            # Trading ON: poll every 1s so confirmation level miss na ho
+            # Trading OFF: 30s enough for alerts
+            await asyncio.sleep(1 if BOT_TRADING_ACTIVE else 30)
 
         except Exception as e:
             logging.error(f"Target checker error: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(1 if BOT_TRADING_ACTIVE else 30)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1576,6 +1626,67 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     )
 
 
+def check_bybit_position_closed(current_price: float) -> str:
+    """If Bybit position size is 0 after we had an open trade, send close reason."""
+    global _active_position
+    side = _active_position.get("side")
+    if not side:
+        return ""
+    try:
+        session = get_bybit_session()
+        res = session.get_positions(category=BYBIT_CATEGORY, symbol=BYBIT_SYMBOL)
+        lst = (res or {}).get("result", {}).get("list", [])
+        size = 0.0
+        if lst:
+            size = float(lst[0].get("size") or 0)
+        if size > 0:
+            return ""
+        entry = _active_position.get("entry")
+        sl = _active_position.get("sl")
+        tp = _active_position.get("tp")
+        trail = _active_position.get("trail_level")
+        reason = "SL / Trailing SL hit (ya manual close)"
+        try:
+            px = float(current_price or 0)
+            slf = float(sl or 0)
+            tpf = float(tp or 0)
+            if side == "Buy":
+                if tpf and px >= tpf * 0.999:
+                    reason = "Take Profit T10 hit"
+                elif slf and px <= slf * 1.001:
+                    if trail and int(trail) >= 1:
+                        reason = f"Trailing SL hit (locked near T{trail})"
+                    else:
+                        reason = "Initial midpoint SL hit"
+            else:
+                if tpf and px <= tpf * 1.001:
+                    reason = "Take Profit ST10 hit"
+                elif slf and px >= slf * 0.999:
+                    if trail and int(trail) >= 1:
+                        reason = f"Trailing SL hit (locked near ST{trail})"
+                    else:
+                        reason = "Initial midpoint SL hit"
+        except Exception:
+            pass
+        msg = (
+            f"🔒 <b>POSITION CLOSED</b>\n"
+            f"• Side: <b>{side}</b>\n"
+            f"• Entry: <code>{entry}</code>\n"
+            f"• Last price: <code>{current_price}</code>\n"
+            f"• Last SL: <code>{sl}</code>\n"
+            f"• TP (T10): <code>{tp}</code>\n"
+            f"• Reason: <b>{reason}</b>"
+        )
+        _active_position = {
+            "side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
+            "sl": None, "trail_level": 0, "mid_sl": None, "levels": None,
+        }
+        return msg
+    except Exception as e:
+        logging.error(f"position close check: {e}")
+        return ""
+
+
 def manage_open_position_trail(current_price: float, application_bot=None) -> str:
     """
     Called every monitor loop while a BTC position is open.
@@ -1663,6 +1774,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_trade_settings["amount"] = amt
         user_trade_settings["leverage"] = lev
         BOT_TRADING_ACTIVE = True
+        save_trade_state()
 
         total_position = amt * lev
         keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
@@ -1694,6 +1806,7 @@ async def stop_trading_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     BOT_TRADING_ACTIVE = False
+    save_trade_state()
     await update.message.reply_text(
         "🛑 <b>Auto-trading STOPPED.</b> Naye orders nahi lagenge.",
         parse_mode="HTML",
@@ -1703,8 +1816,24 @@ async def stop_trading_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def trade_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
+    load_trade_state()
     status = "🟢 ACTIVE" if BOT_TRADING_ACTIVE else "🔴 OFF"
     pos = _active_position
+    extra = ""
+    try:
+        df, src = fetch_data("BITCOIN (BTC)")
+        if df is not None:
+            lvl = calculate_op_levels(df, "BITCOIN (BTC)")
+            extra = (
+                f"\n• Source: <code>{src}</code>\n"
+                f"• Live/Mark: <code>{lvl.get('current_price')}</code>\n"
+                f"• Day Open IST: <code>{lvl.get('day_open')}</code>\n"
+                f"• Buy Confirm: <code>{lvl.get('b_conf')}</code>\n"
+                f"• Sell Confirm: <code>{lvl.get('s_conf')}</code>\n"
+                f"• Mid SL: <code>{round((float(lvl.get('b_conf',0))+float(lvl.get('s_conf',0)))/2,2)}</code>"
+            )
+    except Exception as e:
+        extra = f"\n• Levels fetch error: <code>{e}</code>"
     await update.message.reply_text(
         f"📊 <b>Bybit Auto-Trade Status</b>\n"
         f"• Engine: {status}\n"
@@ -1712,7 +1841,8 @@ async def trade_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Leverage: {user_trade_settings.get('leverage')}x\n"
         f"• Last side: {pos.get('side')}\n"
         f"• Last entry: {pos.get('entry')}\n"
-        f"• Qty: {pos.get('qty')}",
+        f"• Qty: {pos.get('qty')}"
+        + extra,
         parse_mode="HTML",
     )
 
@@ -1720,6 +1850,7 @@ async def trade_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
+    load_trade_state()
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
