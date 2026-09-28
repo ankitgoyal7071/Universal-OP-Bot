@@ -1794,7 +1794,7 @@ def update_bybit_stop_loss(new_sl: float) -> bool:
         return False
 
 
-def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict) -> str:
+def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict, force: bool = False) -> str:
     """
     Entry on b_conf (Buy) / s_conf (Sell).
     Initial SL = midpoint of b_conf & s_conf.
@@ -1802,7 +1802,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     """
     global _active_position
 
-    if not BOT_TRADING_ACTIVE:
+    if not force and not BOT_TRADING_ACTIVE:
         return ""
 
     if _active_position.get("side") == side:
@@ -2042,15 +2042,13 @@ def close_bybit_position(reason="manual"):
 
 
 def manual_market_entry(side: str) -> str:
-    """Enter at CURRENT price (UP=Buy, DOWN=Sell), same SL/trail rules."""
-    if not BOT_TRADING_ACTIVE:
-        return "⚠️ Pehle /trade se engine ON karo."
+    """Enter at CURRENT price (UP=Buy, DOWN=Sell). Engine ON ki zarurat nahi."""
     df, src = fetch_data("BITCOIN (BTC)")
     if df is None:
         return "❌ BTC price fetch fail."
     lvl = calculate_op_levels(df, "BITCOIN (BTC)")
     px = get_bybit_btc_live_price() or float(lvl.get("current_price") or 0)
-    msg = place_bybit_trade(side, px, lvl, user_trade_settings)
+    msg = place_bybit_trade(side, px, lvl, user_trade_settings, force=True)
     if not msg:
         return "❌ Order nahi laga. /tradestatus check karo."
     return "📌 <b>MANUAL ENTRY @ CURRENT PRICE</b>\n" + msg
