@@ -432,6 +432,11 @@ def calculate_op_levels(df, symbol):
     dc = float(df['Close'].iloc[-2])
     dhigh = float(df['High'].iloc[-2])
     dlow = float(df['Low'].iloc[-2])
+    try:
+        bar_date = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d")
+        prev_bar = pd.Timestamp(df.index[-2]).strftime("%Y-%m-%d")
+    except Exception:
+        bar_date, prev_bar = "", ""
 
     closes = df['Close'].iloc[-12:-1].values
     log_returns = [np.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
@@ -564,93 +569,91 @@ def get_bybit_btc_live_price():
 
 def fetch_bybit_btc_futures_df():
     """
-    BTCUSDT linear perpetual OHLC built on IST calendar days (Asia/Kolkata).
-    Levels reset every night 12:00 AM IST — not UTC midnight.
-    Live Close = Bybit mark price.
+    Build daily OHLC on IST calendar dates explicitly.
+    Today row is ALWAYS today IST (12:00 AM → now), even if API daily bar lag kare.
+    Yesterday row is the previous completed IST day.
     """
     try:
-        # 1h candles → resample to IST daily (need ~20+ days → 500 hours)
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        today = now_ist.date()
+
         k_data = _bybit_get_json(
             "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=60&limit=500"
         )
         if not k_data:
-            # fallback UTC daily if hourly fails
-            k_data = _bybit_get_json(
-                "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=90"
-            )
-            use_ist = False
-        else:
-            use_ist = True
-
-        k_list = k_data.get("result", {}).get("list", []) if k_data else []
+            return None
+        k_list = k_data.get("result", {}).get("list", []) or []
         if not k_list:
             return None
 
         rows = []
-        for item in reversed(k_list):
-            ts = int(item[0]) / 1000.0
+        for item in k_list:
+            ts = datetime.fromtimestamp(int(item[0]) / 1000.0, tz=pytz.UTC).astimezone(ist)
             rows.append({
+                "ts": ts,
+                "day": ts.date(),
                 "Open": float(item[1]),
                 "High": float(item[2]),
                 "Low": float(item[3]),
                 "Close": float(item[4]),
                 "Volume": float(item[5]),
-                "_ts": ts,
             })
+        hdf = pd.DataFrame(rows).sort_values("ts")
+        live = get_bybit_btc_live_price()
 
-        df = pd.DataFrame(rows)
-        df.index = pd.to_datetime(df["_ts"], unit="s", utc=True)
-        df = df.drop(columns=["_ts"]).astype(float)
+        days = []
+        unique_days = sorted(set(hdf["day"].tolist() + [today]))
+        for d in unique_days:
+            part = hdf[hdf["day"] == d]
+            if part.empty:
+                if d != today or not live:
+                    continue
+                # no hourly bar yet after midnight — still start today's session
+                days.append({
+                    "day": d,
+                    "Open": live,
+                    "High": live,
+                    "Low": live,
+                    "Close": live,
+                    "Volume": 0.0,
+                })
+                continue
+            o = float(part["Open"].iloc[0])
+            h = float(part["High"].max())
+            l = float(part["Low"].min())
+            c = float(part["Close"].iloc[-1])
+            v = float(part["Volume"].sum())
+            if d == today and live:
+                c = live
+                h = max(h, live)
+                l = min(l, live)
+            days.append({"day": d, "Open": o, "High": h, "Low": l, "Close": c, "Volume": v})
 
-        if use_ist:
-            # Strict calendar day in IST (12:00 AM Asia/Kolkata = new day)
-            ist = pytz.timezone("Asia/Kolkata")
-            df_ist = df.tz_convert(ist)
-            day_key = pd.Series(df_ist.index.strftime("%Y-%m-%d"), index=df_ist.index)
-            daily = df_ist.groupby(day_key.values, sort=True).agg({
-                "Open": "first",
-                "High": "max",
-                "Low": "min",
-                "Close": "last",
-                "Volume": "sum",
-            })
-            daily.index = pd.to_datetime(daily.index)
-            df = daily.dropna()
-            logging.info(
-                f"Bybit BTC IST-daily: {len(df)} | day={df.index[-1].date()} "
-                f"open={float(df['Open'].iloc[-1]):.2f} "
-                f"prev_close={float(df['Close'].iloc[-2]):.2f}"
-            )
-        else:
-            logging.warning("Bybit hourly failed — using UTC daily candles")
-
-        # Live MARK price on today's IST candle
-        t_data = _bybit_get_json(
-            "/v5/market/tickers?category=linear&symbol=BTCUSDT"
+        df = pd.DataFrame(days).sort_values("day")
+        # Guarantee today's IST row exists and is LAST
+        if live and (df.empty or df["day"].iloc[-1] != today):
+            df = pd.concat([df, pd.DataFrame([{
+                "day": today, "Open": live, "High": live, "Low": live, "Close": live, "Volume": 0.0
+            }])], ignore_index=True)
+            df = df.sort_values("day")
+        # If last row is somehow still not today, overwrite last index day
+        if not df.empty and df["day"].iloc[-1] != today and live:
+            df.loc[df.index[-1], "day"] = today
+        df.index = pd.to_datetime(df["day"].astype(str))
+        df = df.drop(columns=["day"])
+        logging.info(
+            f"IST BTC days={list(df.index.strftime('%Y-%m-%d'))[-3:]} "
+            f"today_open={float(df['Open'].iloc[-1]):.2f} "
+            f"prev_close={float(df['Close'].iloc[-2]):.2f}"
         )
-        live = 0.0
-        if t_data:
-            t_list = t_data.get("result", {}).get("list", [])
-            if t_list:
-                mark_p = float(t_list[0].get("markPrice") or 0)
-                last_p = float(t_list[0].get("lastPrice") or 0)
-                live = mark_p or last_p
-
-        if live > 0 and len(df) > 0:
-            df = df.copy()
-            i = df.index[-1]
-            df.at[i, "Close"] = live
-            if live > float(df.at[i, "High"]):
-                df.at[i, "High"] = live
-            if live < float(df.at[i, "Low"]):
-                df.at[i, "Low"] = live
-            logging.info(f"Bybit BTCUSDT futures mark/live: {live}")
-
-        if len(df) >= 12:
+        if len(df) >= 5:
             return df
+        logging.warning(f"Bybit IST df too short: {len(df)}")
     except Exception as e:
         logging.error(f"Bybit BTC futures fetch error: {e}")
     return None
+
 
 
 def fetch_data(symbol):
@@ -672,9 +675,10 @@ def fetch_data(symbol):
         elif "BITCOIN" in clean_sym or clean_sym == "BTC":
             # Prefer Bybit BTCUSDT linear futures (same market as leveraged trade)
             bybit_df = fetch_bybit_btc_futures_df()
-            if bybit_df is not None and len(bybit_df) >= 12:
+            if bybit_df is not None and len(bybit_df) >= 5:
                 return bybit_df, "BYBIT:BTCUSDT"
-            resolved = "BTC-USD"  # fallback yfinance
+            logging.error("Bybit IST BTC fetch failed — not using Yahoo daily (that keeps old levels)")
+            return None, None
         elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
             resolved = "ETH-USD"
         else:
@@ -743,6 +747,8 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     ]
     if is_btc and lvl.get("day_open") is not None:
         out += [
+            f"📅 <b>Today bar:</b> <code>{lvl.get('bar_date')}</code> | "
+            f"<b>Prev bar:</b> <code>{lvl.get('prev_bar')}</code>",
             f"🌅 <b>Day Open (IST):</b> <code>{lvl.get('day_open')}</code>",
             f"📉 <b>Prev Close:</b> <code>{lvl.get('prev_close')}</code> | "
             f"<b>H/L:</b> <code>{lvl.get('prev_high')}/{lvl.get('prev_low')}</code>",
