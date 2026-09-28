@@ -519,7 +519,7 @@ def _bybit_get_json(path_query: str):
                 api_secret=BYBIT_API_SECRET,
             )
             if "tickers" in path_query:
-                return sess.get_tickers(category="linear", symbol="BTCUSDT")
+                return sess.get_tickers(category="spot", symbol="BTCUSDT")
             if "kline" in path_query:
                 # parse interval/limit from query if present
                 interval, limit = "D", 90
@@ -533,7 +533,7 @@ def _bybit_get_json(path_query: str):
                     except Exception:
                         pass
                 return sess.get_kline(
-                    category="linear", symbol="BTCUSDT", interval=interval, limit=limit
+                    category="spot", symbol="BTCUSDT", interval=interval, limit=limit
                 )
         except Exception as e:
             last_err = e
@@ -556,7 +556,7 @@ def _bybit_get_json(path_query: str):
 
 def get_bybit_btc_live_price():
     """Bybit BTCUSDT linear mark/last — fast, for 1-second entry checks."""
-    data = _bybit_get_json("/v5/market/tickers?category=linear&symbol=BTCUSDT")
+    data = _bybit_get_json("/v5/market/tickers?category=spot&symbol=BTCUSDT")
     if not data:
         return 0.0
     lst = data.get("result", {}).get("list", [])
@@ -579,7 +579,7 @@ def fetch_bybit_btc_futures_df():
         today = now_ist.date()
 
         k_data = _bybit_get_json(
-            "/v5/market/kline?category=linear&symbol=BTCUSDT&interval=60&limit=500"
+            "/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=500"
         )
         if not k_data:
             return None
@@ -656,6 +656,81 @@ def fetch_bybit_btc_futures_df():
 
 
 
+
+def fetch_btc_backup_df():
+    """
+    Yahoo nahi. Bybit block ho to Kraken public BTC USD daily + live.
+    """
+    try:
+        url = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440"
+        r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        data = r.json()
+        result = data.get("result") or {}
+        key = next((k for k in result.keys() if k != "last"), None)
+        ohlc = result.get(key) or []
+        if len(ohlc) < 12:
+            return None
+
+        rows = []
+        for k in ohlc:
+            rows.append({
+                "Open": float(k[1]),
+                "High": float(k[2]),
+                "Low": float(k[3]),
+                "Close": float(k[4]),
+                "Volume": float(k[6]),
+                "_ts": int(k[0]),
+            })
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df["_ts"], unit="s", utc=True)
+        df = df.drop(columns=["_ts"])
+
+        live = 0.0
+        try:
+            tr = requests.get(
+                "https://api.kraken.com/0/public/Ticker?pair=XBTUSD",
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if tr.status_code == 200:
+                res = (tr.json().get("result") or {})
+                first = next(iter(res.values()), {})
+                live = float((first.get("c") or [0])[0] or 0)
+        except Exception:
+            pass
+
+        ist = pytz.timezone("Asia/Kolkata")
+        today = datetime.now(ist).date()
+        df_ist = df.tz_convert(ist)
+        day_key = df_ist.index.strftime("%Y-%m-%d")
+        daily = df_ist.groupby(day_key, sort=True).agg({
+            "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
+        })
+        daily.index = pd.to_datetime(daily.index)
+
+        if live > 0:
+            last_d = daily.index[-1].date()
+            if last_d != today:
+                daily.loc[pd.Timestamp(str(today))] = {
+                    "Open": live, "High": live, "Low": live, "Close": live, "Volume": 0.0
+                }
+                daily = daily.sort_index()
+            else:
+                i = daily.index[-1]
+                daily.at[i, "Close"] = live
+                daily.at[i, "High"] = max(float(daily.at[i, "High"]), live)
+                daily.at[i, "Low"] = min(float(daily.at[i, "Low"]), live)
+
+        logging.warning(f"BTC Kraken backup live={live} bars={len(daily)}")
+        if len(daily) >= 12:
+            return daily, "KRAKEN:XBTUSD"
+    except Exception as e:
+        logging.error(f"Kraken BTC backup error: {e}")
+    return None
+
+
+
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
@@ -677,7 +752,10 @@ def fetch_data(symbol):
             bybit_df = fetch_bybit_btc_futures_df()
             if bybit_df is not None and len(bybit_df) >= 5:
                 return bybit_df, "BYBIT:BTCUSDT"
-            logging.error("Bybit IST BTC fetch failed — not using Yahoo daily (that keeps old levels)")
+            logging.warning("Bybit IST BTC failed — trying Kraken backup (no Yahoo)")
+            backup = fetch_btc_backup_df()
+            if backup is not None:
+                return backup
             return None, None
         elif "ETHEREUM" in clean_sym or clean_sym == "ETH":
             resolved = "ETH-USD"
@@ -735,7 +813,7 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
         or "BITCOIN" in (matched_symbol or "").upper()
     )
     if is_btc:
-        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Futures | Day reset: 12:00 AM IST</code>"
+        src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT Spot | Day reset: 12:00 AM IST</code>"
     out = [
         f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
         f"📅 <code>{today_str}</code>",
@@ -743,7 +821,7 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     if src_line:
         out.append(src_line)
     out += [
-        f"💰 <b>Futures LTP/Mark:</b> <code>{lvl['current_price']}</code>",
+        f"💰 <b>Spot LTP:</b> <code>{lvl['current_price']}</code>",
     ]
     if is_btc and lvl.get("day_open") is not None:
         out += [
@@ -942,29 +1020,59 @@ async def target_checker_job(application):
                                 trade_side = None
                                 entry_key = None
 
-                                # LONG when live futures price hits Buy Above Confirm
+                                # heartbeat every ~5 min so you know loop is alive
+                                hb_key = f"{today_str}_BTC_HB_{datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H%M')[:3]}"
+                                # one message per 10-min bucket
+                                bucket = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y%m%d%H') + str(datetime.now(pytz.timezone('Asia/Kolkata')).minute // 10)
+                                hb_key = f"BTC_WATCH_{bucket}"
+                                if hb_key not in notified_today:
+                                    notified_today.add(hb_key)
+                                    try:
+                                        await application.bot.send_message(
+                                            chat_id=ADMIN_ID,
+                                            text=(
+                                                f"👀 <b>BTC WATCH</b> (engine ON)\n"
+                                                f"• Live: <code>{current_lcp}</code>\n"
+                                                f"• Buy Confirm: <code>{b_conf}</code>\n"
+                                                f"• Sell Confirm: <code>{s_conf}</code>\n"
+                                                f"• Gap up: <code>{round(b_conf-current_lcp,2)}</code>\n"
+                                                f"• Gap down: <code>{round(current_lcp-s_conf,2)}</code>"
+                                            ),
+                                            parse_mode="HTML",
+                                        )
+                                    except Exception:
+                                        pass
+
                                 if current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
                                     entry_key = f"{today_str}_{sym}_ENTRY_LONG"
 
-                                # SHORT when price reaches Sell Below Confirm (s_conf)
                                 elif current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
                                     trade_side = "Sell"
                                     entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
 
                                 if trade_side and entry_key:
-                                    notified_today.add(entry_key)
-                                    trade_result = place_bybit_trade(
-                                        side=trade_side,
-                                        current_price=current_lcp,
-                                        lvl=lvl,
-                                        settings=user_trade_settings,
-                                    )
-                                    if trade_result:
-                                        try:
+                                    try:
+                                        trade_result = place_bybit_trade(
+                                            side=trade_side,
+                                            current_price=current_lcp,
+                                            lvl=lvl,
+                                            settings=user_trade_settings,
+                                        )
+                                        notified_today.add(entry_key)
+                                        if trade_result:
                                             await application.bot.send_message(
                                                 chat_id=ADMIN_ID,
                                                 text=trade_result,
+                                                parse_mode="HTML",
+                                            )
+                                    except Exception as pe:
+                                        # do NOT lock entry_key on failure — retry next second
+                                        logging.error(f"place_bybit_trade: {pe}")
+                                        try:
+                                            await application.bot.send_message(
+                                                chat_id=ADMIN_ID,
+                                                text=f"❌ <b>Bybit order FAIL</b>\n{trade_side} @ {current_lcp}\n<code>{pe}</code>",
                                                 parse_mode="HTML",
                                             )
                                         except Exception:
@@ -995,6 +1103,14 @@ async def target_checker_job(application):
                                                 pass
                             except Exception as te:
                                 logging.error(f"Bybit auto-trade error: {te}")
+                                try:
+                                    await application.bot.send_message(
+                                        chat_id=ADMIN_ID,
+                                        text=f"❌ <b>Auto-trade loop error</b>\n<code>{te}</code>",
+                                        parse_mode="HTML",
+                                    )
+                                except Exception:
+                                    pass
 
             # Trading ON: poll every 1s so confirmation level miss na ho
             # Trading OFF: 30s enough for alerts
@@ -1441,11 +1557,11 @@ _active_position = {
 }
 
 BYBIT_SYMBOL = "BTCUSDT"
-BYBIT_CATEGORY = "linear"
+BYBIT_CATEGORY = "spot"
 
 
 def get_bybit_session():
-    """Create authenticated Bybit V5 session (linear USDT perpetuals)."""
+    """Create authenticated Bybit V5 session (spot + spot-margin)."""
     if BybitHTTP is None:
         raise RuntimeError("pybit library missing. Install with: pip install pybit")
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
@@ -1566,19 +1682,20 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
     session = get_bybit_session()
     amount = float(settings.get("amount", 5))
-    leverage = int(settings.get("leverage", 50))
-    notional = amount * leverage
-    qty = _round_qty(notional / max(current_price, 1))
+    leverage = int(settings.get("leverage", 10))
+    leverage = max(1, min(10, leverage))
+    notional = round(amount * leverage, 2)
+    # Spot: qty in USDT (quote), small $2*10x=$20 works
+    qty = f"{notional:.2f}"
 
     try:
-        session.set_leverage(
-            category=BYBIT_CATEGORY,
-            symbol=BYBIT_SYMBOL,
-            buyLeverage=str(leverage),
-            sellLeverage=str(leverage),
-        )
+        # UTA spot margin leverage 1-10
+        if hasattr(session, "spot_margin_uta_set_leverage"):
+            session.spot_margin_uta_set_leverage(leverage=str(leverage))
+        elif hasattr(session, "spot_margin_trade_set_leverage"):
+            session.spot_margin_trade_set_leverage(leverage=str(leverage))
     except Exception as e:
-        logging.warning(f"set_leverage: {e}")
+        logging.warning(f"spot margin leverage: {e}")
 
     levels = _snapshot_levels(lvl)
     mid_sl = levels["mid"]
@@ -1590,19 +1707,20 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     else:
         take_profit = str(levels["st"].get(10) or round(current_price * 0.95, 2))
 
-    order = session.place_order(
-        category=BYBIT_CATEGORY,
+    order_kwargs = dict(
+        category="spot",
         symbol=BYBIT_SYMBOL,
         side=side,
         orderType="Market",
         qty=qty,
-        timeInForce="IOC",
-        takeProfit=take_profit,
-        stopLoss=stop_loss,
-        tpTriggerBy="LastPrice",
-        slTriggerBy="LastPrice",
-        positionIdx=0,
+        marketUnit="quoteCoin",
+        isLeverage=str(leverage),
+        timeInForce="GTC",
     )
+    try:
+        order = session.place_order(**order_kwargs, takeProfit=take_profit, stopLoss=stop_loss)
+    except Exception:
+        order = session.place_order(**order_kwargs)
 
     _active_position = {
         "side": side,
@@ -1756,7 +1874,7 @@ async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Amount Set: <b>${amt}</b>\n\n"
             "⚡ <b>Ab Leverage Enter Karein:</b>\n"
-            "Kripya 1x se 100x ke beech leverage enter karein (jaise: 50):",
+            "Kripya 1x se 10x ke beech leverage enter karein (jaise: 5 ya 10):",
             parse_mode="HTML",
         )
         return LEVERAGE
@@ -1769,9 +1887,9 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_TRADING_ACTIVE, user_trade_settings
     try:
         lev = int(update.message.text.strip().replace("x", "").replace("X", ""))
-        if not (1 <= lev <= 100):
+        if not (1 <= lev <= 10):
             await update.message.reply_text(
-                "⚠️ <b>Invalid Leverage!</b> Kripya 1 se 100 ke beech ki value dein.",
+                "⚠️ <b>Invalid Leverage!</b> Spot margin me sirf 1x se 10x allowed hai.",
                 parse_mode="HTML",
             )
             return LEVERAGE
@@ -1785,7 +1903,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_position = amt * lev
         keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
         await update.message.reply_text(
-            "🟢 <b>BTC FUTURES BOT STARTED SUCCESSFULLY!</b>\n\n"
+            "🟢 <b>BTC SPOT-MARGIN BOT STARTED</b>\n\n"
             f"• <b>Margin:</b> ${amt}\n"
             f"• <b>Leverage:</b> {lev}x\n"
             f"• <b>Total Position Size:</b> ${total_position}\n"
@@ -1798,7 +1916,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("⚠️ Kripya ek valid number enter karein (jaise 50).")
+        await update.message.reply_text("⚠️ Kripya 1 se 10 ke beech leverage enter karein (jaise 10).")
         return LEVERAGE
 
 
