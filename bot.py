@@ -368,13 +368,25 @@ async def is_user_subscribed(bot, user_id: int) -> bool:
         logging.error(f"Force Sub Error: {e}")
         return False
 
-def get_main_menu_keyboard():
+def get_admin_manual_keyboard():
     return ReplyKeyboardMarkup([
+        [KeyboardButton("🟢 MANUAL BUY"), KeyboardButton("🔴 MANUAL SELL")],
+        [KeyboardButton("⏹ CLOSE POSITION"), KeyboardButton("📡 TRADE STATUS")],
+        [KeyboardButton("🛑 STOP AUTO"), KeyboardButton("⚙️ AUTO TRADE")],
+        [KeyboardButton("🔙 Main Menu")]
+    ], resize_keyboard=True)
+
+
+def get_main_menu_keyboard(user_id=None):
+    rows = [
         [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
         [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
         [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")]
-    ], resize_keyboard=True)
+        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")],
+    ]
+    if user_id == ADMIN_ID:
+        rows.insert(0, [KeyboardButton("⚡ MANUAL TRADE")])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def get_op_levels_keyboard():
     return ReplyKeyboardMarkup([
@@ -1149,7 +1161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Welcome to Pro OP Levels Bot!</b>\n"
         "नीचे दिए गए मेनू से विकल्प चुनें:",
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=get_main_menu_keyboard(user.id),
         parse_mode="HTML"
     )
 
@@ -1419,7 +1431,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "🔙 Main Menu":
-        await update.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
+        await update.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard(user.id))
+        return
+
+    if user.id == ADMIN_ID and text == "⚡ MANUAL TRADE":
+        await update.message.reply_text(
+            "⚡ <b>ADMIN MANUAL TRADE</b>\n"
+            "Auto engine alag hai. Ye buttons current price pe order dete hain.\n\n"
+            "Pehle /stoptrade karo agar auto Sell spam ho raha ho.",
+            reply_markup=get_admin_manual_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    if user.id == ADMIN_ID and text == "🟢 MANUAL BUY":
+        await update.message.reply_text(manual_market_entry("Buy"), parse_mode="HTML")
+        return
+
+    if user.id == ADMIN_ID and text == "🔴 MANUAL SELL":
+        await update.message.reply_text(manual_market_entry("Sell"), parse_mode="HTML")
+        return
+
+    if user.id == ADMIN_ID and text == "⏹ CLOSE POSITION":
+        await update.message.reply_text(close_bybit_position("manual close button"), parse_mode="HTML")
+        return
+
+    if user.id == ADMIN_ID and text == "📡 TRADE STATUS":
+        await trade_status_cmd(update, context)
+        return
+
+    if user.id == ADMIN_ID and text == "🛑 STOP AUTO":
+        await stop_trading_cmd(update, context)
+        return
+
+    if user.id == ADMIN_ID and text == "⚙️ AUTO TRADE":
+        await start_trading_flow(update, context)
         return
 
     elif text == "📊 OP Levels Tab":
@@ -2195,6 +2241,8 @@ def main():
     app.add_handler(CommandHandler("short", cmd_short_now))
     app.add_handler(CommandHandler("close", cmd_close_now))
     app.add_handler(CommandHandler("now", cmd_now_help))
+    app.add_handler(CommandHandler("manual", cmd_now_help))
+
 
     trade_conv = ConversationHandler(
         entry_points=[CommandHandler("trade", start_trading_flow)],
