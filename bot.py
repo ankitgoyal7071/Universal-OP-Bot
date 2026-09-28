@@ -42,6 +42,7 @@ PERFORMANCE_FILE = "bot_performance_logs.json"
 START_DATE_FILE = "bot_start_date.json"
 
 WAITING_FOR_HELP = set()
+WAITING_MANUAL_LEV = {}  # user_id -> "Buy"/"Sell"
 
 # Bybit auto-trade flags (persisted so Render restart pe OFF na ho)
 TRADE_STATE_FILE = "bot_trade_state.json"
@@ -1445,11 +1446,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user.id == ADMIN_ID and text == "🟢 MANUAL BUY":
-        await update.message.reply_text(manual_market_entry("Buy"), parse_mode="HTML")
+        WAITING_MANUAL_LEV[user.id] = {"side": "Buy", "amount": None}
+        await update.message.reply_text(
+            "⚡ <b>MANUAL BUY</b>\nPehle <b>margin USDT</b> bhejo (jaise 10).\nMin position ~$83 (0.001 BTC).",
+            parse_mode="HTML",
+        )
         return
 
     if user.id == ADMIN_ID and text == "🔴 MANUAL SELL":
-        await update.message.reply_text(manual_market_entry("Sell"), parse_mode="HTML")
+        WAITING_MANUAL_LEV[user.id] = {"side": "Sell", "amount": None}
+        await update.message.reply_text(
+            "⚡ <b>MANUAL SELL</b>\nPehle <b>margin USDT</b> bhejo (jaise 10).\nMin position ~$83 (0.001 BTC).",
+            parse_mode="HTML",
+        )
+        return
+
+    if user.id == ADMIN_ID and user.id in WAITING_MANUAL_LEV:
+        st = WAITING_MANUAL_LEV[user.id]
+        if st.get("amount") is None:
+            try:
+                amt = float(text.strip().replace("$", ""))
+                if amt < 1:
+                    raise ValueError("amt")
+            except Exception:
+                await update.message.reply_text("⚠️ Amount number me bhejo (jaise 10).")
+                return
+            st["amount"] = amt
+            await update.message.reply_text(
+                f"✅ Margin ${amt}\nAb leverage <b>1–150</b> bhejo (jaise 20).\n"
+                f"Size = {amt} × leverage. $83 se kam hua to reject.",
+                parse_mode="HTML",
+            )
+            return
+        try:
+            lev = int(text.strip().replace("x", "").replace("X", ""))
+            if not (1 <= lev <= 150):
+                raise ValueError("range")
+        except Exception:
+            await update.message.reply_text("⚠️ 1 se 150 ke beech number (jaise 20).")
+            return
+        amt = float(st["amount"])
+        if amt * lev < 80:
+            await update.message.reply_text(
+                f"❌ Size ${amt}×{lev}x = ${amt*lev:.0f} min ~$83 se kam.\n"
+                f"Leverage badhao (jaise {int(83/amt)+1}x) ya amount badhao.",
+            )
+            return
+        user_trade_settings["amount"] = amt
+        user_trade_settings["leverage"] = lev
+        save_trade_state()
+        side = st["side"]
+        WAITING_MANUAL_LEV.pop(user.id, None)
+        await update.message.reply_text(manual_market_entry(side), parse_mode="HTML")
         return
 
     if user.id == ADMIN_ID and text == "⏹ CLOSE POSITION":
@@ -1812,7 +1860,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 20))
-    leverage = max(1, min(100, leverage))
+    leverage = max(1, min(150, leverage))
     notional = round(max(amount, 10.0) * leverage, 2)
     px = max(float(current_price or 0), 1.0)
     # Linear BTCUSDT qty = BTC. Min ~0.001
@@ -2076,13 +2124,21 @@ def manual_market_entry(side: str) -> str:
 async def cmd_long_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    await update.message.reply_text(manual_market_entry("Buy"), parse_mode="HTML")
+    WAITING_MANUAL_LEV[update.effective_user.id] = {"side": "Buy", "amount": None}
+    await update.message.reply_text(
+        "⚡ <b>MANUAL BUY</b>\nPehle margin USDT bhejo (jaise 10):",
+        parse_mode="HTML",
+    )
 
 
 async def cmd_short_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    await update.message.reply_text(manual_market_entry("Sell"), parse_mode="HTML")
+    WAITING_MANUAL_LEV[update.effective_user.id] = {"side": "Sell", "amount": None}
+    await update.message.reply_text(
+        "⚡ <b>MANUAL SELL</b>\nPehle margin USDT bhejo (jaise 10):",
+        parse_mode="HTML",
+    )
 
 
 async def cmd_close_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2149,9 +2205,9 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_TRADING_ACTIVE, user_trade_settings
     try:
         lev = int(update.message.text.strip().replace("x", "").replace("X", ""))
-        if not (1 <= lev <= 100):
+        if not (1 <= lev <= 150):
             await update.message.reply_text(
-                "⚠️ <b>Invalid Leverage!</b> 1x se 100x allowed hai.",
+                "⚠️ <b>Invalid Leverage!</b> 1x se 150x allowed hai.",
                 parse_mode="HTML",
             )
             return LEVERAGE
