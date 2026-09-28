@@ -17,6 +17,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError
 import requests
+import hmac
+import hashlib
+import time
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
@@ -1559,6 +1562,63 @@ _active_position = {
 BYBIT_SYMBOL = "BTCUSDT"
 BYBIT_CATEGORY = "spot"
 
+def bybit_signed_request(method: str, path: str, params: dict = None):
+    """Bybit V5 signed REST — pybit ke bina bhi order chalega."""
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        raise RuntimeError("BYBIT_API_KEY / BYBIT_API_SECRET env vars not set")
+    params = params or {}
+    ts = str(int(time.time() * 1000))
+    recv = "20000"
+    if method.upper() == "GET":
+        query = "&".join(f"{k}={params[k]}" for k in sorted(params))
+        payload = ts + BYBIT_API_KEY + recv + query
+        sign = hmac.new(BYBIT_API_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        headers = {
+            "X-BAPI-API-KEY": BYBIT_API_KEY,
+            "X-BAPI-TIMESTAMP": ts,
+            "X-BAPI-RECV-WINDOW": recv,
+            "X-BAPI-SIGN": sign,
+        }
+        url = "https://api.bybit.com" + path + (("?" + query) if query else "")
+        r = requests.get(url, headers=headers, timeout=15)
+    else:
+        body = json.dumps(params, separators=(",", ":"))
+        payload = ts + BYBIT_API_KEY + recv + body
+        sign = hmac.new(BYBIT_API_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        headers = {
+            "X-BAPI-API-KEY": BYBIT_API_KEY,
+            "X-BAPI-TIMESTAMP": ts,
+            "X-BAPI-RECV-WINDOW": recv,
+            "X-BAPI-SIGN": sign,
+            "Content-Type": "application/json",
+        }
+        r = requests.post("https://api.bybit.com" + path, headers=headers, data=body, timeout=15)
+    try:
+        data = r.json()
+    except Exception:
+        raise RuntimeError(f"Bybit HTTP {r.status_code}: {r.text[:200]}")
+    if data.get("retCode") not in (0, "0", None) and data.get("retCode") != 0:
+        # retCode 0 is success; if missing treat as raw
+        if int(data.get("retCode") or -1) != 0:
+            raise RuntimeError(f"Bybit {data.get('retCode')}: {data.get('retMsg')}")
+    return data
+
+
+def bybit_place_spot_order(side: str, qty: str, extra: dict = None):
+    payload = {
+        "category": "spot",
+        "symbol": BYBIT_SYMBOL,
+        "side": side,
+        "orderType": "Market",
+        "qty": str(qty),
+        "marketUnit": "quoteCoin",
+        "timeInForce": "GTC",
+    }
+    if extra:
+        payload.update(extra)
+    return bybit_signed_request("POST", "/v5/order/create", payload)
+
+
 
 def get_bybit_session():
     """Create authenticated Bybit V5 session (spot + spot-margin)."""
@@ -1680,7 +1740,6 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     if _active_position.get("side") == side:
         return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL}. Skip new order."
 
-    session = get_bybit_session()
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 10))
     leverage = max(1, min(10, leverage))
@@ -1689,11 +1748,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     qty = f"{notional:.2f}"
 
     try:
-        # UTA spot margin leverage 1-10
-        if hasattr(session, "spot_margin_uta_set_leverage"):
-            session.spot_margin_uta_set_leverage(leverage=str(leverage))
-        elif hasattr(session, "spot_margin_trade_set_leverage"):
-            session.spot_margin_trade_set_leverage(leverage=str(leverage))
+        bybit_signed_request("POST", "/v5/spot-margin-uta/set-leverage", {"leverage": str(leverage)})
     except Exception as e:
         logging.warning(f"spot margin leverage: {e}")
 
@@ -1707,20 +1762,30 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     else:
         take_profit = str(levels["st"].get(10) or round(current_price * 0.95, 2))
 
-    order_kwargs = dict(
-        category="spot",
-        symbol=BYBIT_SYMBOL,
-        side=side,
-        orderType="Market",
-        qty=qty,
-        marketUnit="quoteCoin",
-        isLeverage=str(leverage),
-        timeInForce="GTC",
-    )
+    extra = {"isLeverage": str(leverage)}
     try:
-        order = session.place_order(**order_kwargs, takeProfit=take_profit, stopLoss=stop_loss)
-    except Exception:
-        order = session.place_order(**order_kwargs)
+        extra["takeProfit"] = take_profit
+        extra["stopLoss"] = stop_loss
+        order = bybit_place_spot_order(side, qty, extra)
+    except Exception as e1:
+        logging.warning(f"spot order with TP/SL failed: {e1}")
+        try:
+            order = bybit_place_spot_order(side, qty, {"isLeverage": str(leverage)})
+        except Exception as e2:
+            # last try: pybit if installed
+            if BybitHTTP is None:
+                raise e2
+            session = get_bybit_session()
+            order = session.place_order(
+                category="spot",
+                symbol=BYBIT_SYMBOL,
+                side=side,
+                orderType="Market",
+                qty=qty,
+                marketUnit="quoteCoin",
+                isLeverage=str(leverage),
+                timeInForce="GTC",
+            )
 
     _active_position = {
         "side": side,
