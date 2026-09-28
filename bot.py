@@ -527,259 +527,6 @@ def _bybit_get_json(path_query: str):
                     interval, limit = "60", 500
                 elif "interval=D" in path_query:
                     interval, limit = "D", 90
-                if "liNet: <b>₹{net:+,.2f} Cr ({status})</b>\n"
-                    ])
-                elif "DII" in cat:
-                    dii_net = net
-                    msg.extend([
-                        "🏢 <b>DII Activity:</b>",
-                        f"• Buy: <code>₹{buy:,.2f} Cr</code>",
-                        f"• Sell: <code>₹{sell:,.2f} Cr</code>",
-                        f"• Net: <b>₹{net:+,.2f} Cr ({status})</b>\n"
-                    ])
-            
-            total_net = fii_net + dii_net
-            sentiment = "🟢 <b>Overall Mood: Bullish (Net Inflow)</b>" if total_net > 0 else "🔴 <b>Overall Mood: Bearish (Net Outflow)</b>"
-            msg.extend([
-                "<code>──────────────────────────────</code>",
-                f"📊 <b>Combined Institutional Net Flow:</b> <code>₹{total_net:+,.2f} Cr</code>",
-                sentiment
-            ])
-            msg.append(SEBI_DISCLAIMER_TEXT)
-            return "\n".join(msg)
-    except Exception as e:
-        logging.error(f"FII/DII Fetch Error: {e}")
-
-    return (
-        "🏛️ <b>NSE FII / DII CASH MARKET ACTIVITY</b>\n"
-        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        "ℹ️ <i>NSE Provisional Cash Data शाम 5:30 PM के बाद अपडेट होता है।</i>"
-        + SEBI_DISCLAIMER_TEXT
-    )
-
-def get_economic_calendar():
-    ist = pytz.timezone('Asia/Kolkata')
-    curr_month = datetime.now(ist).strftime('%B %Y')
-    return (
-        f"📅 <b>GLOBAL ECONOMIC CALENDAR & KEY EVENTS ({curr_month})</b>\n"
-        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        "⚡ <b>Major Macro Events & Market Drivers:</b>\n\n"
-        "🏦 <b>1. RBI MPC Meeting & Rate Decision:</b>\n"
-        "• <i>High Impact:</i> BankNifty, FinNifty, Realty, Auto Stocks\n\n"
-        "🇺🇸 <b>2. US Fed FOMC Interest Rate Decision:</b>\n"
-        "• <i>High Impact:</i> Global Markets, Nifty 50, IT Sector, Gold\n\n"
-        "📈 <b>3. India CPI Inflation & IIP Data:</b>\n"
-        "• <i>Impact:</i> Domestic Macro & Bond Yields\n\n"
-        "💼 <b>4. US Non-Farm Payrolls (NFP):</b>\n"
-        "• <i>Impact:</i> Dollar Index (DXY), Gold & Silver\n\n"
-        "🛢️ <b>5. US EIA Crude Oil Inventories:</b>\n"
-        "• <i>Impact:</i> Global Crude Oil, Energy Stocks"
-        + SEBI_DISCLAIMER_TEXT
-    )
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"OP Levels Pro Bot running healthy!")
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
-
-ALIAS_MAP = {
-    "NIFTY": "^NSEI",
-    "NIFTY 50": "^NSEI",
-    "NIFTY50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-    "BANK NIFTY": "^NSEBANK",
-    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-    "FIN NIFTY": "NIFTY_FIN_SERVICE.NS",
-    "MIDCPNIFTY": "^NSEMDCP50",
-    "MIDCAP NIFTY": "^NSEMDCP50",
-    "SENSEX": "^BSESN",
-    "BANKEX": "BSEBK.BO",
-    "MCX": "MCX.NS",
-    "BTC": "BTC-USD",
-    "BITCOIN": "BTC-USD",
-    "ETH": "ETH-USD",
-    "ETHEREUM": "ETH-USD"
-}
-
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-async def is_user_subscribed(bot, user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except TelegramError as e:
-        logging.error(f"Force Sub Error: {e}")
-        return False
-
-def get_main_menu_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("📊 OP Levels Tab"), KeyboardButton("💱 Forex & Global Tab")],
-        [KeyboardButton("🪙 Crypto Tab"), KeyboardButton("🏛️ FII/DII Data")],
-        [KeyboardButton("📅 Economic Calendar"), KeyboardButton("👥 VIP Referral Link")],
-        [KeyboardButton("🆘 Help & Support"), KeyboardButton("📖 How to Use? (गाइड)")]
-    ], resize_keyboard=True)
-
-def get_op_levels_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("📊 NIFTY 50"), KeyboardButton("📈 BANKNIFTY")],
-        [KeyboardButton("🪙 FINNIFTY"), KeyboardButton("⚡ SENSEX")],
-        [KeyboardButton("⚡ MIDCPNIFTY"), KeyboardButton("🔙 Main Menu")]
-    ], resize_keyboard=True)
-
-def get_forex_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("💱 SPOT GOLD (XAUUSD)"), KeyboardButton("💱 SPOT SILVER (XAGUSD)")],
-        [KeyboardButton("💱 GLOBAL CRUDE OIL"), KeyboardButton("💱 GLOBAL NATURAL GAS")],
-        [KeyboardButton("🔙 Main Menu")]
-    ], resize_keyboard=True)
-
-def get_crypto_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("🪙 BITCOIN (BTC)"), KeyboardButton("🪙 ETHEREUM (ETH)")],
-        [KeyboardButton("🔙 Main Menu")]
-    ], resize_keyboard=True)
-
-def get_force_sub_markup():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Join Channel / चैनल जॉइन करें", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("🔄 Verify Joined / वेरिफाई करें", callback_data="check_joined")]
-    ])
-
-def calculate_strikes_2percent(spot_price, symbol):
-    sym_u = symbol.upper()
-    step = 100 if ("BANK" in sym_u or "SENSEX" in sym_u) else 50
-    call_raw = spot_price - (spot_price * 0.02)
-    put_raw = spot_price + (spot_price * 0.02)
-    return {
-        "call_1": int(round(call_raw / step) * step),
-        "call_2": int((round(call_raw / step) * step) + step),
-        "put_1": int(round(put_raw / step) * step),
-        "put_2": int((round(put_raw / step) * step) - step)
-    }
-
-def get_market_mood():
-    try:
-        vix_df = yf.Ticker("^INDIAVIX").history(period="5d", interval="1d")
-        if not vix_df.empty:
-            vix_val = round(float(vix_df['Close'].iloc[-1]), 2)
-            if vix_val < 13:
-                return f"{vix_val} (Low Volatility / Sideways ⚠️)"
-            elif vix_val <= 18:
-                return f"{vix_val} (Balanced Volatility 🟢)"
-            else:
-                return f"{vix_val} (High Volatility / Breakouts ⚡)"
-    except Exception:
-        pass
-    return "14.20 (Balanced Swing Mode 🟢)"
-
-def calculate_op_levels(df, symbol):
-    current_price = round(float(df['Close'].iloc[-1]), 2)
-    dop = float(df['Open'].iloc[-1])
-    dc = float(df['Close'].iloc[-2])
-    dhigh = float(df['High'].iloc[-2])
-    dlow = float(df['Low'].iloc[-2])
-    try:
-        bar_date = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d")
-        prev_bar = pd.Timestamp(df.index[-2]).strftime("%Y-%m-%d")
-    except Exception:
-        bar_date, prev_bar = "", ""
-
-    closes = df['Close'].iloc[-12:-1].values
-    log_returns = [np.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
-    avg_logg0 = sum(log_returns) / 10.0
-    sq_sum0 = sum([x**2 for x in log_returns]) / 10.0
-    volatility0 = np.sqrt(max(0, sq_sum0 - (avg_logg0**2)))
-    range11 = round(dc * volatility0)
-
-    doKdc = dop if abs(dop - dc) > (0.382 * range11) else dc
-    logg = np.log(doKdc / closes[-2])
-    adjusted_logs = [logg] + log_returns[:-1]
-    avg_logg = sum(adjusted_logs) / 10.0
-    sq_sum = sum([x**2 for x in adjusted_logs]) / 10.0
-    volatility = np.sqrt(max(0, sq_sum - (avg_logg**2)))
-    range1 = round(doKdc * volatility)
-
-    pivot = round((dhigh + dlow + dc) / 3)
-    bc_raw = round((dhigh + dlow) / 2)
-    tc_raw = round((pivot - bc_raw) + pivot)
-    
-    bc = min(bc_raw, tc_raw)
-    tc = max(bc_raw, tc_raw)
-
-    cpr_width = abs(tc - bc)
-    cpr_percent = (cpr_width / pivot) * 100 if pivot else 0
-    if cpr_percent < 0.25:
-        cpr_type = "⚡ Narrow CPR (Trending Day Expected)"
-    elif cpr_percent > 0.65:
-        cpr_type = "⚠️ Wide CPR (Rangebound Day)"
-    else:
-        cpr_type = "⚖️ Normal CPR (Moderate Day)"
-
-    targets = {}
-    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
-    for idx, r in enumerate(ratios, 1):
-        targets[f"bt{idx}"] = round(doKdc + (range1 * r), 2)
-        targets[f"st{idx}"] = round(doKdc - (range1 * r), 2)
-
-    clean_symbol = symbol.upper().strip()
-    is_major_index = any(x in clean_symbol for x in ["NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
-    strikes = calculate_strikes_2percent(current_price, symbol) if is_major_index else None
-
-    return {
-        "current_price": current_price,
-        "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
-        "cpr_type": cpr_type,
-        "market_mood": get_market_mood(),
-        "is_major_index": is_major_index,
-        "b_above": round(doKdc + (range1 * 0.236), 2),
-        "b_conf": round(doKdc + (range1 * 0.382), 2),
-        "s_below": round(doKdc - (range1 * 0.236), 2),
-        "s_conf": round(doKdc - (range1 * 0.382), 2),
-        "strikes": strikes,
-        **targets
-    }
-
-
-def _bybit_get_json(path_query: str):
-    """
-    Try multiple Bybit hosts. Prefer authenticated session if API keys exist
-    (Render se public sometimes block hota hai; signed session more reliable).
-    """
-    bases = [
-        "https://api.bybit.com",
-        "https://api.bytick.com",
-    ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; OPLevelsBot/1.0)",
-        "Accept": "application/json",
-    }
-    last_err = None
-
-    # 1) Authenticated HTTP via pybit if keys available
-    if BYBIT_API_KEY and BYBIT_API_SECRET:
-        try:
-            from pybit.unified_trading import HTTP as _BybitHTTP
-            sess = _BybitHTTP(
-                testnet=False,
-                api_key=BYBIT_API_KEY,
-                api_secret=BYBIT_API_SECRET,
-            )
-            if "tickers" in path_query:
-                return sess.get_tickers(category="spot", symbol="BTCUSDT")
-            if "kline" in path_query:
-                # parse interval/limit from query if present
-                interval, limit = "D", 90
-                if "interval=60" in path_query:
-                    interval, limit = "60", 500
-                elif "interval=D" in path_query:
-                    interval, limit = "D", 90
                 if "limit=" in path_query:
                     try:
                         limit = int(path_query.split("limit=")[1].split("&")[0])
@@ -1985,6 +1732,9 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         "mid_sl": mid_sl,
         "levels": levels,
         "tp": take_profit,
+        "btc_qty": round(notional / max(current_price, 1), 6),
+        "notional": notional,
+        "leverage": leverage,
     }
 
     ret = order.get("retMsg", "OK") if isinstance(order, dict) else str(order)
@@ -2097,6 +1847,115 @@ def manage_open_position_trail(current_price: float, application_bot=None) -> st
 
 
 
+
+def close_bybit_position(reason="manual"):
+    """Close current spot-margin BTC position at market."""
+    global _active_position
+    side = _active_position.get("side")
+    if not side:
+        return "ℹ️ Koi open trade nahi hai."
+    session = get_bybit_session()
+    close_side = "Sell" if side == "Buy" else "Buy"
+    btc_qty = _active_position.get("btc_qty")
+    notional = _active_position.get("notional")
+    lev = str(int(_active_position.get("leverage") or user_trade_settings.get("leverage") or 10))
+    last_err = None
+    if btc_qty:
+        try:
+            session.place_order(
+                category="spot",
+                symbol=BYBIT_SYMBOL,
+                side=close_side,
+                orderType="Market",
+                qty=f"{float(btc_qty):.6f}",
+                marketUnit="baseCoin",
+                isLeverage=lev,
+                timeInForce="GTC",
+            )
+            old = dict(_active_position)
+            _active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
+                                "sl": None, "trail_level": 0, "mid_sl": None, "levels": None}
+            return (
+                f"🛑 <b>TRADE CLOSED</b> ({reason})\n"
+                f"• Closed: <b>{close_side}</b> to exit {old.get('side')}\n"
+                f"• Entry was: <code>{old.get('entry')}</code>\n"
+                f"• Qty: <code>{btc_qty}</code> BTC"
+            )
+        except Exception as e:
+            last_err = e
+    if notional:
+        try:
+            session.place_order(
+                category="spot",
+                symbol=BYBIT_SYMBOL,
+                side=close_side,
+                orderType="Market",
+                qty=f"{float(notional):.2f}",
+                marketUnit="quoteCoin",
+                isLeverage=lev,
+                timeInForce="GTC",
+            )
+            old = dict(_active_position)
+            _active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
+                                "sl": None, "trail_level": 0, "mid_sl": None, "levels": None}
+            return (
+                f"🛑 <b>TRADE CLOSED</b> ({reason})\n"
+                f"• Closed: <b>{close_side}</b> to exit {old.get('side')}\n"
+                f"• Entry was: <code>{old.get('entry')}</code>"
+            )
+        except Exception as e:
+            last_err = e
+    return f"❌ Close fail: <code>{last_err}</code>"
+
+
+def manual_market_entry(side: str) -> str:
+    """Enter at CURRENT price (UP=Buy, DOWN=Sell), same SL/trail rules."""
+    if not BOT_TRADING_ACTIVE:
+        return "⚠️ Pehle /trade se engine ON karo."
+    df, src = fetch_data("BITCOIN (BTC)")
+    if df is None:
+        return "❌ BTC price fetch fail."
+    lvl = calculate_op_levels(df, "BITCOIN (BTC)")
+    px = get_bybit_btc_live_price() or float(lvl.get("current_price") or 0)
+    msg = place_bybit_trade(side, px, lvl, user_trade_settings)
+    if not msg:
+        return "❌ Order nahi laga. /tradestatus check karo."
+    return "📌 <b>MANUAL ENTRY @ CURRENT PRICE</b>\n" + msg
+
+
+async def cmd_long_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(manual_market_entry("Buy"), parse_mode="HTML")
+
+
+async def cmd_short_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(manual_market_entry("Sell"), parse_mode="HTML")
+
+
+async def cmd_close_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(close_bybit_position("manual /close"), parse_mode="HTML")
+
+
+async def cmd_now_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(
+        "📌 <b>Current price pe trade</b>\n"
+        "Level miss ho jaye to yahan se lo:\n\n"
+        "• /long — UP (Buy) abhi ke price pe\n"
+        "• /short — DOWN (Sell) abhi ke price pe\n"
+        "• /close — current open trade band\n"
+        "• /tradestatus — engine + last trade\n\n"
+        "Auto entry Confirm pe pehle jaisi rahegi.",
+        parse_mode="HTML",
+    )
+
+
 async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
@@ -2164,7 +2023,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🚀 Bot ab <b>Buy Above Confirm</b> / <b>Sell Below Confirm</b> pe entry lega.\n"
             "• Initial SL = midpoint (b_conf + s_conf)/2\n"
             "• Trail: T2→T1 … T10→T9, above T10→T10 lock (SHORT same)\n\n"
-            "Band karne ke liye: /stoptrade",
+            "Manual: /long  /short  /close\nBand (auto engine): /stoptrade",
             parse_mode="HTML",
         )
         return ConversationHandler.END
@@ -2245,6 +2104,10 @@ def main():
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
     app.add_handler(CommandHandler("stoptrade", stop_trading_cmd))
     app.add_handler(CommandHandler("tradestatus", trade_status_cmd))
+    app.add_handler(CommandHandler("long", cmd_long_now))
+    app.add_handler(CommandHandler("short", cmd_short_now))
+    app.add_handler(CommandHandler("close", cmd_close_now))
+    app.add_handler(CommandHandler("now", cmd_now_help))
 
     trade_conv = ConversationHandler(
         entry_points=[CommandHandler("trade", start_trading_flow)],
