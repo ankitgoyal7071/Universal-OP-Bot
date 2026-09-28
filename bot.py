@@ -1606,7 +1606,7 @@ _active_position = {
 }
 
 BYBIT_SYMBOL = "BTCUSDT"
-BYBIT_CATEGORY = "spot"
+BYBIT_CATEGORY = "linear"  # USDT-M perpetual futures
 
 def bybit_signed_request(method: str, path: str, params: dict = None):
     """Bybit V5 signed REST — pybit ke bina bhi order chalega."""
@@ -1673,16 +1673,18 @@ def bybit_signed_request(method: str, path: str, params: dict = None):
 
 
 def bybit_place_spot_order(side: str, qty: str, extra: dict = None):
+    """Name legacy; ab USDT-M linear (Futures) order."""
     payload = {
-        "category": "spot",
+        "category": BYBIT_CATEGORY,
         "symbol": BYBIT_SYMBOL,
         "side": side,
         "orderType": "Market",
         "qty": str(qty),
-        "marketUnit": "quoteCoin",
         "timeInForce": "GTC",
+        "positionIdx": 0,
     }
     if extra:
+        extra = {k: v for k, v in extra.items() if k not in ("isLeverage", "marketUnit")}
         payload.update(extra)
     return bybit_signed_request("POST", "/v5/order/create", payload)
 
@@ -1811,14 +1813,21 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 10))
     leverage = max(1, min(10, leverage))
-    notional = round(amount * leverage, 2)
-    # Spot: qty in USDT (quote), small $2*10x=$20 works
-    qty = f"{notional:.2f}"
+    notional = round(max(amount, 10.0) * leverage, 2)
+    px = max(float(current_price or 0), 1.0)
+    # Linear BTCUSDT qty = BTC. Min ~0.001
+    btc_qty = max(0.001, round(notional / px, 3))
+    qty = f"{btc_qty:.3f}"
 
     try:
-        bybit_signed_request("POST", "/v5/spot-margin-uta/set-leverage", {"leverage": str(leverage)})
+        bybit_signed_request("POST", "/v5/position/set-leverage", {
+            "category": BYBIT_CATEGORY,
+            "symbol": BYBIT_SYMBOL,
+            "buyLeverage": str(leverage),
+            "sellLeverage": str(leverage),
+        })
     except Exception as e:
-        logging.warning(f"spot margin leverage: {e}")
+        logging.warning(f"futures leverage: {e}")
 
     levels = _snapshot_levels(lvl)
     mid_sl = levels["mid"]
@@ -1834,6 +1843,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     try:
         extra["takeProfit"] = take_profit
         extra["stopLoss"] = stop_loss
+        extra.pop("isLeverage", None)
         order = bybit_place_spot_order(side, qty, extra)
     except Exception as e1:
         logging.warning(f"spot order with TP/SL failed: {e1}")
@@ -1845,14 +1855,13 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
                 raise e2
             session = get_bybit_session()
             order = session.place_order(
-                category="spot",
+                category=BYBIT_CATEGORY,
                 symbol=BYBIT_SYMBOL,
                 side=side,
                 orderType="Market",
                 qty=qty,
-                marketUnit="quoteCoin",
-                isLeverage=str(leverage),
                 timeInForce="GTC",
+                positionIdx=0,
             )
 
     _active_position = {
@@ -1996,14 +2005,14 @@ def close_bybit_position(reason="manual"):
     if btc_qty:
         try:
             session.place_order(
-                category="spot",
+                category=BYBIT_CATEGORY,
                 symbol=BYBIT_SYMBOL,
                 side=close_side,
                 orderType="Market",
-                qty=f"{float(btc_qty):.6f}",
-                marketUnit="baseCoin",
-                isLeverage=lev,
+                qty=f"{float(btc_qty):.3f}",
                 timeInForce="GTC",
+                reduceOnly=True,
+                positionIdx=0,
             )
             old = dict(_active_position)
             _active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
@@ -2019,14 +2028,14 @@ def close_bybit_position(reason="manual"):
     if notional:
         try:
             session.place_order(
-                category="spot",
+                category=BYBIT_CATEGORY,
                 symbol=BYBIT_SYMBOL,
                 side=close_side,
                 orderType="Market",
-                qty=f"{float(notional):.2f}",
-                marketUnit="quoteCoin",
-                isLeverage=lev,
+                qty=f"{max(0.001, round(float(notional) / max(float(_active_position.get('entry') or 1), 1), 3)):.3f}",
                 timeInForce="GTC",
+                reduceOnly=True,
+                positionIdx=0,
             )
             old = dict(_active_position)
             _active_position = {"side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
