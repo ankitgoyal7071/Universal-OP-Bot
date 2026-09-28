@@ -1579,8 +1579,19 @@ def bybit_signed_request(method: str, path: str, params: dict = None):
             "X-BAPI-RECV-WINDOW": recv,
             "X-BAPI-SIGN": sign,
         }
-        url = "https://api.bybit.com" + path + (("?" + query) if query else "")
-        r = requests.get(url, headers=headers, timeout=15)
+        r = None
+        last = None
+        for host in ("https://api.bytick.com", "https://api.bybit.com"):
+            url = host + path + (("?" + query) if query else "")
+            try:
+                r = requests.get(url, headers=headers, timeout=15)
+                if r.status_code != 403:
+                    break
+                last = r
+            except Exception as e:
+                last = e
+        if r is None:
+            raise RuntimeError(str(last))
     else:
         body = json.dumps(params, separators=(",", ":"))
         payload = ts + BYBIT_API_KEY + recv + body
@@ -1592,7 +1603,18 @@ def bybit_signed_request(method: str, path: str, params: dict = None):
             "X-BAPI-SIGN": sign,
             "Content-Type": "application/json",
         }
-        r = requests.post("https://api.bybit.com" + path, headers=headers, data=body, timeout=15)
+        r = None
+        last = None
+        for host in ("https://api.bytick.com", "https://api.bybit.com"):
+            try:
+                r = requests.post(host + path, headers=headers, data=body, timeout=15)
+                if r.status_code != 403:
+                    break
+                last = r
+            except Exception as e:
+                last = e
+        if r is None:
+            raise RuntimeError(str(last))
     try:
         data = r.json()
     except Exception:
