@@ -1160,7 +1160,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    if not await is_user_subscribed(context.bot, user.id):
+    if user.id != ADMIN_ID and not await is_user_subscribed(context.bot, user.id):
         await update.message.reply_text(
             "⚠️ <b>कृपया बोट इस्तेमाल करने के लिए हमारा आधिकारिक चैनल जॉइन करें:</b>",
             reply_markup=get_force_sub_markup(),
@@ -1402,7 +1402,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     save_user(user)
 
-    if not await is_user_subscribed(context.bot, user.id):
+    if user.id != ADMIN_ID and not await is_user_subscribed(context.bot, user.id):
         await update.message.reply_text(
             "⚠️ <b>कृपया बोट इस्तेमाल करने के लिए हमारा आधिकारिक चैनल जॉइन करें:</b>",
             reply_markup=get_force_sub_markup(),
