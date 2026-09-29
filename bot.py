@@ -757,6 +757,36 @@ def fetch_btc_backup_df():
 
 
 
+def fetch_yahoo_chart_df(ticker: str):
+    """yfinance hang/429 se bachne ke liye direct chart API."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        params = {"interval": "1d", "range": "3mo"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, params=params, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return None
+        res = (r.json().get("chart") or {}).get("result") or []
+        if not res:
+            return None
+        node = res[0]
+        ts = node.get("timestamp") or []
+        q = ((node.get("indicators") or {}).get("quote") or [{}])[0]
+        if not ts or not q.get("close"):
+            return None
+        df = pd.DataFrame({
+            "Open": q.get("open"),
+            "High": q.get("high"),
+            "Low": q.get("low"),
+            "Close": q.get("close"),
+        }, index=pd.to_datetime(ts, unit="s"))
+        df = df.dropna()
+        return df if len(df) >= 12 else None
+    except Exception as e:
+        logging.warning(f"yahoo chart {ticker}: {e}")
+        return None
+
+
 def fetch_data(symbol):
     try:
         sym_u = symbol.upper().strip()
@@ -787,6 +817,15 @@ def fetch_data(symbol):
             resolved = "ETH-USD"
         else:
             resolved = ALIAS_MAP.get(clean_sym, clean_sym)
+            # strip button words
+            for k, v in ALIAS_MAP.items():
+                if k in clean_sym:
+                    resolved = v
+                    break
+
+        chart_df = fetch_yahoo_chart_df(resolved)
+        if chart_df is not None:
+            return chart_df, f"CHART:{resolved}"
 
         candidates = [resolved]
         if not any(resolved.endswith(x) for x in [".NS", ".BO", "=F", "=X", "-USD"]) and not resolved.startswith("^"):
@@ -1595,15 +1634,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg_wait = await update.message.reply_text("⏳ <i>Calculating precise algorithm levels...</i>", parse_mode="HTML")
         
-        df, resolved_sym = fetch_data(query_sym)
-        if df is not None:
-            ist = pytz.timezone('Asia/Kolkata')
-            today_str = datetime.now(ist).strftime('%Y-%m-%d')
-            lvl = calculate_op_levels(df, query_sym)
-            response_text = format_color_display(text, today_str, lvl, resolved_sym or query_sym)
-            await msg_wait.edit_text(response_text, parse_mode="HTML")
-        else:
-            await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
+        try:
+            df, resolved_sym = fetch_data(query_sym)
+            if df is not None:
+                ist = pytz.timezone('Asia/Kolkata')
+                today_str = datetime.now(ist).strftime('%Y-%m-%d')
+                lvl = calculate_op_levels(df, query_sym)
+                try:
+                    response_text = format_color_display(text, today_str, lvl, resolved_sym or query_sym)
+                    await msg_wait.edit_text(response_text, parse_mode="HTML")
+                except Exception:
+                    await msg_wait.edit_text(
+                        f"📊 <b>{text}</b>\n"
+                        f"• Price: <code>{lvl.get('current_price')}</code>\n"
+                        f"• Buy Conf: <code>{lvl.get('b_conf')}</code>\n"
+                        f"• Sell Conf: <code>{lvl.get('s_conf')}</code>\n"
+                        f"• Mid SL: <code>{lvl.get('mid')}</code>\n"
+                        f"• T1: {lvl.get('bt1')} | ST1: {lvl.get('st1')}\n"
+                        f"• T2: {lvl.get('bt2')} | ST2: {lvl.get('st2')}",
+                        parse_mode="HTML",
+                    )
+            else:
+                await msg_wait.edit_text("❌ <b>Error:</b> Data fetch failed.", parse_mode="HTML")
+        except Exception as e:
+            await msg_wait.edit_text(f"❌ Level error: {e}")
         return
 
     else:
