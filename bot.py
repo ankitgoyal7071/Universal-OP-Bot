@@ -48,21 +48,32 @@ WAITING_MANUAL_LEV = {}  # user_id -> "Buy"/"Sell"
 TRADE_STATE_FILE = "bot_trade_state.json"
 BOT_TRADING_ACTIVE = False
 user_trade_settings = {"amount": 10.0, "leverage": 20}
+BLOCKED_SAME_DIR = set()  # midpoint SL hit → isi direction me auto dubara nahi
+
+LAST_UTC_DAY = None
 
 def load_trade_state():
-    global BOT_TRADING_ACTIVE, user_trade_settings
+    global BOT_TRADING_ACTIVE, user_trade_settings, _active_position, LAST_UTC_DAY, BLOCKED_SAME_DIR
     data = load_data(TRADE_STATE_FILE, {})
     if data:
         BOT_TRADING_ACTIVE = bool(data.get("active", False))
         user_trade_settings["amount"] = float(data.get("amount", user_trade_settings.get("amount", 5)))
         user_trade_settings["leverage"] = int(data.get("leverage", user_trade_settings.get("leverage", 50)))
+        pos = data.get("position")
+        if isinstance(pos, dict) and pos.get("side"):
+            _active_position.update(pos)
+        LAST_UTC_DAY = data.get("utc_day")
+        BLOCKED_SAME_DIR = set(data.get("blocked") or [])
     return BOT_TRADING_ACTIVE, user_trade_settings
 
 def save_trade_state():
     save_data(TRADE_STATE_FILE, {
         "active": bool(BOT_TRADING_ACTIVE),
         "amount": float(user_trade_settings.get("amount", 5)),
-        "leverage": int(user_trade_settings.get("leverage", 50)),
+        "leverage": int(user_trade_settings.get("leverage", 20)),
+        "position": dict(_active_position),
+        "utc_day": LAST_UTC_DAY,
+        "blocked": list(BLOCKED_SAME_DIR),
     })
 
 
@@ -1035,28 +1046,13 @@ async def target_checker_job(application):
                                 trade_side = None
                                 entry_key = None
 
-                                # heartbeat every ~5 min so you know loop is alive
-                                hb_key = f"{today_str}_BTC_HB_{datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H%M')[:3]}"
-                                # one message per 10-min bucket
-                                bucket = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y%m%d%H') + str(datetime.now(pytz.timezone('Asia/Kolkata')).minute // 10)
-                                hb_key = f"BTC_WATCH_{bucket}"
+                                # heartbeat max 1 per 6 hours — spam band
+                                hb_bucket = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y%m%d") + str(
+                                    datetime.now(pytz.timezone("Asia/Kolkata")).hour // 6
+                                )
+                                hb_key = f"BTC_WATCH_{hb_bucket}"
                                 if hb_key not in notified_today:
                                     notified_today.add(hb_key)
-                                    try:
-                                        await application.bot.send_message(
-                                            chat_id=ADMIN_ID,
-                                            text=(
-                                                f"👀 <b>BTC WATCH</b> (engine ON)\n"
-                                                f"• Live: <code>{current_lcp}</code>\n"
-                                                f"• Buy Confirm: <code>{b_conf}</code>\n"
-                                                f"• Sell Confirm: <code>{s_conf}</code>\n"
-                                                f"• Gap up: <code>{round(b_conf-current_lcp,2)}</code>\n"
-                                                f"• Gap down: <code>{round(current_lcp-s_conf,2)}</code>"
-                                            ),
-                                            parse_mode="HTML",
-                                        )
-                                    except Exception:
-                                        pass
 
                                 if current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
@@ -1106,6 +1102,16 @@ async def target_checker_job(application):
                                         except Exception:
                                             pass
                                     else:
+                                        day_msg = apply_new_utc_day_if_needed(current_lcp)
+                                        if day_msg:
+                                            try:
+                                                await application.bot.send_message(
+                                                    chat_id=ADMIN_ID,
+                                                    text=day_msg,
+                                                    parse_mode="HTML",
+                                                )
+                                            except Exception:
+                                                pass
                                         trail_msg = manage_open_position_trail(current_lcp)
                                         if trail_msg:
                                             try:
@@ -1853,9 +1859,13 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
     if not force and not BOT_TRADING_ACTIVE:
         return ""
+    if not force and side in BLOCKED_SAME_DIR:
+        return f"⛔ Midpoint SL hit ho chuka. Aaj auto {side} dubara nahi. Opposite Confirm pe chalega."
 
-    if _active_position.get("side") == side:
-        return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL}. Skip new order."
+    pos_day = str(_active_position.get("entry_day") or "")
+    utc_today = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
+    if _active_position.get("side") == side and pos_day == utc_today:
+        return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL} aaj. Skip new order."
 
     amount = float(settings.get("amount", 5))
     leverage = int(settings.get("leverage", 20))
@@ -1931,6 +1941,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         "trail_level": 0,
         "mid_sl": mid_sl,
         "levels": levels,
+        "entry_day": datetime.now(pytz.UTC).strftime("%Y-%m-%d"),
         "tp": take_profit,
         "btc_qty": round(notional / max(current_price, 1), 6),
         "notional": notional,
@@ -2014,6 +2025,45 @@ def check_bybit_position_closed(current_price: float) -> str:
         return ""
 
 
+def apply_new_utc_day_if_needed(current_price: float) -> str:
+    """5:30 IST / 00:00 UTC: hold position pe AAJ ke T1-T10 + SL."""
+    global LAST_UTC_DAY, _active_position
+    today = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
+    if LAST_UTC_DAY == today:
+        return ""
+    LAST_UTC_DAY = today
+    side = _active_position.get("side")
+    if not side:
+        save_trade_state()
+        return f"🌅 New UTC day {today}."
+    try:
+        df = fetch_bybit_btc_futures_df()
+        if df is None or len(df) < 2:
+            save_trade_state()
+            return f"🌅 Day {today}: BTC df nahi, SL purana."
+        lvl = calculate_op_levels(df, "BITCOIN (BTC)")
+        snap = _snapshot_levels(lvl)
+        px = float(current_price or lvl.get("current_price") or 0)
+        old_sl = float(_active_position.get("sl") or snap.get("mid") or 0)
+        new_sl, trail_lvl = compute_trail_sl(side, px, snap, snap.get("mid") or old_sl)
+        _active_position["levels"] = snap
+        _active_position["mid_sl"] = snap.get("mid")
+        _active_position["sl"] = new_sl
+        _active_position["trail_level"] = trail_lvl
+        update_bybit_stop_loss(new_sl)
+        save_trade_state()
+        return (
+            f"🌅 <b>DAY CHANGE · AAJ KE LEVELS</b>\n"
+            f"• Hold {side} @ {_active_position.get('entry')}\n"
+            f"• Aaj Buy Conf {snap.get('b_conf')} / Sell Conf {snap.get('s_conf')}\n"
+            f"• Mid {snap.get('mid')} → SL <code>{new_sl}</code> (T{trail_lvl or 'mid'})\n"
+            f"• Aaj Confirm pe naya auto order bhi lag sakta"
+        )
+    except Exception as e:
+        save_trade_state()
+        return f"🌅 Day change levels fail: {e}"
+
+
 def manage_open_position_trail(current_price: float, application_bot=None) -> str:
     """
     Called every monitor loop while a BTC position is open.
@@ -2037,6 +2087,7 @@ def manage_open_position_trail(current_price: float, application_bot=None) -> st
 
     _active_position["sl"] = new_sl
     _active_position["trail_level"] = trail_lvl
+    save_trade_state()
     return (
         f"🔄 <b>TRAILING SL UPDATED</b>\n"
         f"• Side: <b>{side}</b>\n"
