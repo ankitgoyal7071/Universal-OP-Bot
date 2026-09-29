@@ -21,7 +21,7 @@ import hmac
 import hashlib
 import time
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN environment variable not set!")
 
@@ -1003,7 +1003,6 @@ async def target_checker_job(application):
             if len(notified_today) > 0 and list(notified_today)[0].split("_")[0] != today_str:
                 notified_today.clear()
 
-            load_trade_state()
             subs = load_data(SUBSCRIPTIONS_FILE, {})
             all_symbols = set()
             for u_list in (subs or {}).values():
@@ -2091,6 +2090,7 @@ def check_bybit_position_closed(current_price: float) -> str:
             "side": None, "entry": None, "qty": None, "symbol": "BTCUSDT",
             "sl": None, "trail_level": 0, "mid_sl": None, "levels": None,
         }
+        save_trade_state()
         return msg
     except Exception as e:
         logging.error(f"position close check: {e}")
