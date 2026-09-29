@@ -1599,6 +1599,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         symbol_input = text.strip()
+        if symbol_input.replace(".", "", 1).isdigit() and len(symbol_input) <= 6:
+            await update.message.reply_text(
+                "⚠️ Number levels nahi hai.\n"
+                "Auto engine: /trade\n"
+                "Phir amount, phir leverage."
+            )
+            return
         save_user_subscription(user.id, symbol_input)
 
         ok, err_msg = validate_market_access(symbol_input)
@@ -2264,6 +2271,19 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return LEVERAGE
 
         amt = float(context.user_data.get("temp_amount", 5))
+        px = float(get_bybit_btc_live_price() or 83000)
+        min_notional = 0.001 * px
+        need_margin = min_notional / max(lev, 1)
+        if amt * lev < min_notional - 1:
+            await update.message.reply_text(
+                f"⛔ <b>Size chhota</b>\n"
+                f"Min qty 0.001 BTC ≈ <code>${min_notional:.0f}</code>\n"
+                f"Tune: ${amt} × {lev}x = <code>${amt*lev:.0f}</code>\n"
+                f"Kam se kam margin ≈ <code>${need_margin:.1f}</code> at {lev}x\n"
+                f"Ya leverage badhao. Dobara number bhejo.",
+                parse_mode="HTML",
+            )
+            return LEVERAGE
         user_trade_settings["amount"] = amt
         user_trade_settings["leverage"] = lev
         BOT_TRADING_ACTIVE = True
