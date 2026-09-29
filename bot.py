@@ -2369,7 +2369,10 @@ def main():
 
 
     trade_conv = ConversationHandler(
-        entry_points=[CommandHandler("trade", start_trading_flow)],
+        entry_points=[
+            CommandHandler("trade", start_trading_flow),
+            MessageHandler(filters.Regex("^⚙️ AUTO TRADE$"), start_trading_flow),
+        ],
         states={
             AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)],
             LEVERAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_leverage)],
