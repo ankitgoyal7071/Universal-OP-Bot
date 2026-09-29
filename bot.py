@@ -2292,7 +2292,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_position = amt * lev
         keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
         await update.message.reply_text(
-            "🟢 <b>BTC SPOT-MARGIN BOT STARTED</b>\n\n"
+            "🟢 <b>BTC FUTURES BOT STARTED</b> <code>v29-calc</code>\n\n"
             f"• <b>Margin:</b> ${amt}\n"
             f"• <b>Leverage:</b> {lev}x\n"
             f"• <b>Total Position Size:</b> ${total_position}\n"
