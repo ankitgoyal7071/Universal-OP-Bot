@@ -1027,6 +1027,8 @@ async def target_checker_job(application):
                                 log_performance_profit(matched_asset, target_key, raw_points_earned)
 
                             for uid_str, user_syms in subs.items():
+                                if int(uid_str) != ADMIN_ID:
+                                    continue
                                 if sym in user_syms:
                                     try:
                                         await application.bot.send_message(
@@ -1144,6 +1146,8 @@ async def target_checker_job(application):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if user.id != ADMIN_ID:
+        return
     if is_user_blocked(user.id):
         return
 
@@ -1390,6 +1394,8 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if user.id != ADMIN_ID:
+        return
     if is_user_blocked(user.id):
         return
 
@@ -1630,6 +1636,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
+    if user_id != ADMIN_ID:
+        return
 
     if query.data == "check_joined":
         if await is_user_subscribed(context.bot, user_id):
