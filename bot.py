@@ -977,6 +977,9 @@ async def target_checker_job(application):
 
             if all_symbols:
                 for sym in all_symbols:
+                    raw = str(sym).strip()
+                    if raw.replace(".", "", 1).isdigit() or raw.upper() in ("START", "4", "5", "8"):
+                        continue
                     ok, _ = validate_market_access(sym)
                     if not ok:
                         continue
