@@ -32,6 +32,7 @@ BYBIT_API_SECRET = os.environ.get("BYBIT_API_SECRET", "").strip()
 ADMIN_ID = 1612210913
 CHANNEL_USERNAME = "@LIVEOPTIONDATA"
 CHANNEL_LINK = "https://t.me/LIVEOPTIONDATA"
+LEVELS_GROUP = os.environ.get("LEVELS_GROUP", CHANNEL_USERNAME)
 
 USERS_FILE = "bot_users.json"
 REFERRALS_FILE = "bot_referrals.json"
@@ -1002,6 +1003,39 @@ async def target_checker_job(application):
             
             if len(notified_today) > 0 and list(notified_today)[0].split("_")[0] != today_str:
                 notified_today.clear()
+
+            # Group: Nifty + BankNifty ek baar 9:30 IST, weekend/holiday nahi
+            morn_key = f"{today_str}_GRP_930"
+            if (
+                now.weekday() < 5
+                and today_str not in NSE_HOLIDAYS
+                and now.hour == 9
+                and now.minute == 30
+                and morn_key not in notified_today
+            ):
+                notified_today.add(morn_key)
+                try:
+                    parts = [f"📊 <b>DAILY LEVELS</b> {today_str} 9:30 IST"]
+                    for name in ("📊 NIFTY 50", "📈 BANKNIFTY"):
+                        df, src = fetch_data(name)
+                        if df is None:
+                            parts.append(f"\n{name}: data nahi")
+                            continue
+                        lv = calculate_op_levels(df, name)
+                        parts.append(
+                            f"\n<b>{name}</b> ({src})\n"
+                            f"• LTP <code>{lv.get('current_price')}</code>\n"
+                            f"• Buy Conf <code>{lv.get('b_conf')}</code>\n"
+                            f"• Sell Conf <code>{lv.get('s_conf')}</code>\n"
+                            f"• Mid <code>{lv.get('mid')}</code>"
+                        )
+                    await application.bot.send_message(
+                        chat_id=LEVELS_GROUP,
+                        text="\n".join(parts),
+                        parse_mode="HTML",
+                    )
+                except Exception as ge:
+                    logging.error(f"morning group levels: {ge}")
 
             subs = load_data(SUBSCRIPTIONS_FILE, {})
             all_symbols = set()
