@@ -1198,23 +1198,12 @@ async def target_checker_job(application):
 
                         if hit_msg and target_key:
                             notified_today.add(target_key)
-
                             if matched_asset:
                                 log_performance_profit(matched_asset, target_key, raw_points_earned)
-
-                            for uid_str, user_syms in subs.items():
-                                if int(uid_str) != ADMIN_ID:
-                                    continue
-                                if sym in user_syms:
-                                    try:
-                                        await application.bot.send_message(
-                                            chat_id=int(uid_str),
-                                            text=hit_msg + SEBI_DISCLAIMER_TEXT,
-                                            parse_mode="HTML",
-                                        )
-                                        await asyncio.sleep(0.05)
-                                    except Exception:
-                                        pass
+                            # Nifty/Bank live T1-T2 alerts band — sirf 9:30 group.
+                            # BTC hit bhi yahan spam na ho; trail loop alag message karti hai.
+                            hit_msg = ""
+                            target_key = ""
 
                         # ===== AUTO TRADE BTC: Entry b_conf/s_conf + midpoint SL + T1-T10 trail =====
                         if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
