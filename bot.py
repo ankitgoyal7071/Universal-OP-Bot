@@ -984,6 +984,64 @@ def get_performance_report():
 
 notified_today = set()
 
+_last_trail_alert_sl = None
+
+async def btc_trail_job(application):
+    """Sirf Bybit price — Yahoo nahi. SL change pe ek message."""
+    global _active_position, _last_trail_alert_sl
+    while True:
+        try:
+            side = _active_position.get("side")
+            lvls = _active_position.get("levels")
+            if side and lvls:
+                px = float(get_bybit_btc_live_price() or 0)
+                if px:
+                    cur_sl = float(_active_position.get("sl") or 0)
+                    new_sl, trail_n = compute_trail_sl(side, px, lvls, cur_sl)
+                    if new_sl and abs(new_sl - cur_sl) >= 0.5:
+                        if update_bybit_stop_loss(new_sl):
+                            _active_position["sl"] = new_sl
+                            _active_position["trail_level"] = trail_n
+                            save_trade_state()
+                            if _last_trail_alert_sl != new_sl:
+                                _last_trail_alert_sl = new_sl
+                                try:
+                                    await application.bot.send_message(
+                                        chat_id=ADMIN_ID,
+                                        text=(
+                                            f"📈 <b>SL TRAIL</b>\n"
+                                            f"• Side {side}\n"
+                                            f"• Price <code>{px}</code>\n"
+                                            f"• New SL <code>{new_sl}</code> (T{trail_n})"
+                                        ),
+                                        parse_mode="HTML",
+                                    )
+                                except Exception:
+                                    pass
+                    closed = check_bybit_position_closed(px)
+                    if closed:
+                        if _last_trail_alert_sl != "closed":
+                            _last_trail_alert_sl = "closed"
+                            try:
+                                await application.bot.send_message(
+                                    chat_id=ADMIN_ID, text=closed, parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
+            await asyncio.sleep(2)
+        except Exception as e:
+            logging.error(f"btc_trail_job: {e}")
+            await asyncio.sleep(3)
+
+
+def start_btc_trail(application):
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(btc_trail_job(application))
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def start_target_monitor(application):
     def monitor_loop():
         loop = asyncio.new_event_loop()
@@ -992,6 +1050,47 @@ def start_target_monitor(application):
     
     t = threading.Thread(target=monitor_loop, daemon=True)
     t.start()
+
+
+async def btc_fast_trail_job(application):
+    """Yahoo se alag: har 1s sirf Bybit price + trailing SL."""
+    last_trail_note = ""
+    while True:
+        try:
+            if _active_position.get("side"):
+                px = get_bybit_btc_live_price()
+                if px:
+                    close_msg = check_bybit_position_closed(px)
+                    if close_msg:
+                        try:
+                            await application.bot.send_message(
+                                chat_id=ADMIN_ID, text=close_msg, parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        trail_msg = manage_open_position_trail(px)
+                        if trail_msg and trail_msg != last_trail_note:
+                            last_trail_note = trail_msg
+                            try:
+                                await application.bot.send_message(
+                                    chat_id=ADMIN_ID, text=trail_msg, parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
+            await asyncio.sleep(1)
+        except Exception as e:
+            logging.error(f"btc_fast_trail: {e}")
+            await asyncio.sleep(1)
+
+
+def start_btc_fast_trail(application):
+    def runner():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(btc_fast_trail_job(application))
+
+    threading.Thread(target=runner, daemon=True).start()
 
 async def target_checker_job(application):
     global notified_today
@@ -2467,6 +2566,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     start_target_monitor(app)
+    start_btc_trail(app)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("performance", admin_performance))
