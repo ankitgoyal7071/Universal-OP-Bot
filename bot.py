@@ -915,12 +915,12 @@ def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
         "🎯 <b>KEY PRO LEVELS & TARGETS</b>",
         f"🚀 <b>Entry Confirmed (Buy Above):</b> <code>{lvl['b_conf']}</code>",
         f"⚠️ <b>Ready for Entry (Near):</b> <code>{lvl['b_above']}</code>",
-        f"🎯 <b>Target 1 (T1):</b> <code>{lvl['bt1']}</code>",
-        f"🔥 <b>Target 2 (T2):</b> <code>{lvl['bt2']}</code>\n",
+        f"🎯 <b>UP T1–T10:</b> <code>{lvl['bt1']}</code> <code>{lvl['bt2']}</code> <code>{lvl['bt3']}</code> <code>{lvl['bt4']}</code> <code>{lvl['bt5']}</code>",
+        f"<code>{lvl['bt6']}</code> <code>{lvl['bt7']}</code> <code>{lvl['bt8']}</code> <code>{lvl['bt9']}</code> <code>{lvl['bt10']}</code>",
         f"🔻 <b>Sell Below (Confirm):</b> <code>{lvl['s_conf']}</code>",
         f"⚠️ <b>Ready for Entry (Near):</b> <code>{lvl['s_below']}</code>",
-        f"🎯 <b>Target 1 (T1):</b> <code>{lvl['st1']}</code>",
-        f"🔥 <b>Target 2 (T2):</b> <code>{lvl['st2']}</code>"
+        f"🎯 <b>DN ST1–ST10:</b> <code>{lvl['st1']}</code> <code>{lvl['st2']}</code> <code>{lvl['st3']}</code> <code>{lvl['st4']}</code> <code>{lvl['st5']}</code>",
+        f"<code>{lvl['st6']}</code> <code>{lvl['st7']}</code> <code>{lvl['st8']}</code> <code>{lvl['st9']}</code> <code>{lvl['st10']}</code>"
     ])
     out.append(SEBI_DISCLAIMER_TEXT)
     return "\n".join(out)
@@ -1121,12 +1121,14 @@ async def target_checker_job(application):
                             parts.append(f"\n{name}: data nahi")
                             continue
                         lv = calculate_op_levels(df, name)
+                        ups = " ".join(str(lv.get(f"bt{i}")) for i in range(1, 11))
+                        dns = " ".join(str(lv.get(f"st{i}")) for i in range(1, 11))
                         parts.append(
                             f"\n<b>{name}</b> ({src})\n"
                             f"• LTP <code>{lv.get('current_price')}</code>\n"
-                            f"• Buy Conf <code>{lv.get('b_conf')}</code>\n"
-                            f"• Sell Conf <code>{lv.get('s_conf')}</code>\n"
-                            f"• Mid <code>{lv.get('mid')}</code>"
+                            f"• Buy Conf <code>{lv.get('b_conf')}</code> | Sell Conf <code>{lv.get('s_conf')}</code>\n"
+                            f"• UP T1-T10: <code>{ups}</code>\n"
+                            f"• DN ST1-ST10: <code>{dns}</code>"
                         )
                     await application.bot.send_message(
                         chat_id=LEVELS_GROUP,
@@ -2524,6 +2526,35 @@ async def stop_trading_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def trailcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bina order: agar ab Long/Short hota to SL kahan hota."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        df, src = fetch_data("BITCOIN (BTC)")
+        px = float(get_bybit_btc_live_price() or 0)
+        if df is None:
+            await update.message.reply_text("BTC levels nahi mile.")
+            return
+        lvl = calculate_op_levels(df, "BITCOIN (BTC)")
+        snap = _snapshot_levels(lvl)
+        mid = snap["mid"]
+        sl_l, n_l = compute_trail_sl("Buy", px, snap, mid)
+        sl_s, n_s = compute_trail_sl("Sell", px, snap, mid)
+        await update.message.reply_text(
+            "🧪 <b>TRAIL CHECK</b> (order nahi)\n"
+            f"• Live <code>{px}</code> ({src})\n"
+            f"• BuyConf {lvl.get('b_conf')} SellConf {lvl.get('s_conf')} Mid {mid}\n"
+            f"• T1 {lvl.get('bt1')} T2 {lvl.get('bt2')} T3 {lvl.get('bt3')} T4 {lvl.get('bt4')}\n"
+            f"• Agar LONG hota: SL <code>{sl_l}</code> (trail T{n_l})\n"
+            f"• Agar SHORT hota: SL <code>{sl_s}</code> (trail ST{n_s})\n"
+            "T2+ live pe SL T1+ dikhe to logic theek.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"trailcheck error: {e}")
+
+
 async def trade_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -2580,6 +2611,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
     app.add_handler(CommandHandler("stoptrade", stop_trading_cmd))
     app.add_handler(CommandHandler("tradestatus", trade_status_cmd))
+    app.add_handler(CommandHandler("trailcheck", trailcheck_cmd))
     app.add_handler(CommandHandler("long", cmd_long_now))
     app.add_handler(CommandHandler("short", cmd_short_now))
     app.add_handler(CommandHandler("close", cmd_close_now))
