@@ -47,6 +47,8 @@ WAITING_MANUAL_LEV = {}  # user_id -> "Buy"/"Sell"
 
 # Bybit auto-trade flags (persisted so Render restart pe OFF na ho)
 TRADE_STATE_FILE = "bot_trade_state.json"
+INITIAL_SL_POINTS = 799.0
+ENTRY_AFTER_HOUR_IST = 16
 BOT_TRADING_ACTIVE = False
 user_trade_settings = {"amount": 10.0, "leverage": 20}
 BLOCKED_SAME_DIR = set()  # midpoint SL hit → isi direction me auto dubara nahi
@@ -498,7 +500,7 @@ def calculate_op_levels(df, symbol):
         cpr_type = "⚖️ Normal CPR (Moderate Day)"
 
     targets = {}
-    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000]
+    ratios = [0.500, 0.618, 0.786, 1.000, 1.272, 1.618, 2.000, 2.272, 2.618, 3.000, 3.618, 4.236]
     for idx, r in enumerate(ratios, 1):
         targets[f"bt{idx}"] = round(doKdc + (range1 * r), 2)
         targets[f"st{idx}"] = round(doKdc - (range1 * r), 2)
@@ -1221,11 +1223,13 @@ async def target_checker_job(application):
                                 if hb_key not in notified_today:
                                     notified_today.add(hb_key)
 
-                                if current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
+                                ist_now = datetime.now(pytz.timezone("Asia/Kolkata"))
+                                day_used = f"{today_str}_{sym}_ENTRY_DONE" in notified_today
+                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and not day_used and current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
                                     entry_key = f"{today_str}_{sym}_ENTRY_LONG"
 
-                                elif current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
+                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and not day_used and current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
                                     trade_side = "Sell"
                                     entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
 
@@ -1238,6 +1242,7 @@ async def target_checker_job(application):
                                             settings=user_trade_settings,
                                         )
                                         notified_today.add(entry_key)
+                                        notified_today.add(f"{today_str}_{sym}_ENTRY_DONE")
                                         if trade_result:
                                             await application.bot.send_message(
                                                 chat_id=ADMIN_ID,
@@ -1966,9 +1971,9 @@ def _midpoint_sl(lvl: dict) -> float:
 
 
 def _snapshot_levels(lvl: dict) -> dict:
-    """Store T1..T10 both sides from OP levels at entry time."""
+    """Store T1..T12 both sides from OP levels at entry time."""
     out = {"bt": {}, "st": {}}
-    for i in range(1, 11):
+    for i in range(1, 13):
         out["bt"][i] = float(lvl.get(f"bt{i}") or 0)
         out["st"][i] = float(lvl.get(f"st{i}") or 0)
     out["b_conf"] = float(lvl.get("b_conf") or 0)
@@ -1979,50 +1984,30 @@ def _snapshot_levels(lvl: dict) -> dict:
 
 def compute_trail_sl(side: str, price: float, levels: dict, current_sl: float) -> tuple:
     """
-    Trailing rule (user logic):
-      - Initial SL = midpoint (b_conf + s_conf) / 2
-      - At T1 / ST1: SL stays midpoint
+    Trailing rule:
+      - Initial SL = entry +/- 799 points
+      - Before T2 / ST2: SL stays at that fixed stop
       - When price hits Tn (n>=2): SL moves to T(n-1)
-      - When price goes beyond T10 / ST10: SL locks at T10 / ST10
+      - When price hits T12 / ST12: SL locks at T11 / ST11
     Returns (new_sl, trail_level_index)
     """
-    mid = float(levels.get("mid") or current_sl)
-    new_sl = mid
+    entry = float(levels.get("entry") or 0)
+    base = entry - INITIAL_SL_POINTS if side == "Buy" else entry + INITIAL_SL_POINTS
+    new_sl = base
     trail_lvl = 0
-
-    if side == "Buy":
-        bt = levels.get("bt") or {}
-        # n from 2..10: if price >= Tn → SL = T(n-1)
-        for n in range(2, 11):
-            tn = bt.get(n) or 0
-            if tn and price >= tn:
-                prev = bt.get(n - 1) or mid
-                new_sl = prev
-                trail_lvl = n - 1
-        # above T10 → lock T10
-        t10 = bt.get(10) or 0
-        if t10 and price > t10:
-            new_sl = t10
-            trail_lvl = 10
-        # only improve SL upward for long
-        if current_sl and new_sl < current_sl:
+    book = levels.get("bt") if side == "Buy" else levels.get("st")
+    book = book or {}
+    for n in range(2, 13):
+        tn = book.get(n) or 0
+        hit = price >= tn if side == "Buy" else price <= tn
+        if tn and hit:
+            new_sl = book.get(n - 1) or base
+            trail_lvl = n - 1
+    if current_sl:
+        if side == "Buy" and new_sl < current_sl:
             new_sl = current_sl
-    else:
-        st = levels.get("st") or {}
-        for n in range(2, 11):
-            tn = st.get(n) or 0
-            if tn and price <= tn:
-                prev = st.get(n - 1) or mid
-                new_sl = prev
-                trail_lvl = n - 1
-        t10 = st.get(10) or 0
-        if t10 and price < t10:
-            new_sl = t10
-            trail_lvl = 10
-        # only improve SL downward for short
-        if current_sl and new_sl > current_sl:
+        if side != "Buy" and new_sl > current_sl:
             new_sl = current_sl
-
     return round(float(new_sl), 2), trail_lvl
 
 
@@ -2059,6 +2044,12 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
     pos_day = str(_active_position.get("entry_day") or "")
     utc_today = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
+    ist_now = datetime.now(pytz.timezone("Asia/Kolkata"))
+    ist_today = ist_now.strftime("%Y-%m-%d")
+    if not force and ist_now.hour < ENTRY_AFTER_HOUR_IST:
+        return f"⛔ Entry sirf {ENTRY_AFTER_HOUR_IST}:00 IST ke baad. Abhi {ist_now.strftime('%H:%M')}."
+    if not force and str(_active_position.get("entry_day") or "") == ist_today:
+        return "⛔ Sirf ek entry ek din. Aaj ka order ho chuka."
     if _active_position.get("side") == side and pos_day == utc_today:
         return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL} aaj. Skip new order."
 
@@ -2093,14 +2084,15 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         logging.warning(f"futures leverage: {e}")
 
     levels = _snapshot_levels(lvl)
-    mid_sl = levels["mid"]
+    levels["entry"] = float(current_price)
+    mid_sl = round(float(current_price) - INITIAL_SL_POINTS, 2) if side == "Buy" else round(float(current_price) + INITIAL_SL_POINTS, 2)
     stop_loss = str(mid_sl)
 
-    # Far TP at T10 / ST10 (optional hard target)
+    # Far TP at T12 / ST12
     if side == "Buy":
-        take_profit = str(levels["bt"].get(10) or round(current_price * 1.05, 2))
+        take_profit = str(levels["bt"].get(12) or round(current_price * 1.05, 2))
     else:
-        take_profit = str(levels["st"].get(10) or round(current_price * 0.95, 2))
+        take_profit = str(levels["st"].get(12) or round(current_price * 0.95, 2))
 
     extra = {"isLeverage": str(leverage)}
     try:
@@ -2136,7 +2128,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         "trail_level": 0,
         "mid_sl": mid_sl,
         "levels": levels,
-        "entry_day": datetime.now(pytz.UTC).strftime("%Y-%m-%d"),
+        "entry_day": datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d"),
         "tp": take_profit,
         "btc_qty": round(notional / max(current_price, 1), 6),
         "notional": notional,
@@ -2152,9 +2144,9 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
         f"• Qty: <code>{qty}</code> BTC\n"
         f"• Entry ~: <code>{current_price}</code>\n"
         f"• Margin: <code>${amount}</code> | Lev: <code>{leverage}x</code>\n"
-        f"• Initial SL (midpoint): <code>{mid_sl}</code>\n"
-        f"• TP (T10): <code>{take_profit}</code>\n"
-        f"• Trail: T2→T1 … T10→T9, above T10→T10 lock\n"
+        f"• Initial SL (799 pts): <code>{mid_sl}</code>\n"
+        f"• TP (T12): <code>{take_profit}</code>\n"
+        f"• Trail: T2→T1 … T12→T11\n"
         f"• API: <code>{ret}</code>"
     )
 
