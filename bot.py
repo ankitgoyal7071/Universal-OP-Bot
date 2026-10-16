@@ -49,6 +49,7 @@ WAITING_MANUAL_LEV = {}  # user_id -> "Buy"/"Sell"
 TRADE_STATE_FILE = "bot_trade_state.json"
 INITIAL_SL_POINTS = 799.0
 ENTRY_AFTER_HOUR_IST = 16
+LAST_BTC_PX = {"px": None}
 BOT_TRADING_ACTIVE = False
 user_trade_settings = {"amount": 10.0, "leverage": 20, "symbol": "BTCUSDT"}
 BLOCKED_SAME_DIR = set()  # midpoint SL hit → isi direction me auto dubara nahi
@@ -1242,12 +1243,15 @@ async def target_checker_job(application):
                                     notified_today.add(hb_key)
 
                                 ist_now = datetime.now(pytz.timezone("Asia/Kolkata"))
-                                day_used = f"{today_str}_{sym}_ENTRY_DONE" in notified_today
-                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
+                                prev_px = LAST_BTC_PX.get("px")
+                                LAST_BTC_PX["px"] = current_lcp
+                                crossed_up = prev_px is not None and prev_px < b_conf <= current_lcp
+                                crossed_dn = prev_px is not None and prev_px > s_conf >= current_lcp
+                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and crossed_up and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
                                     entry_key = f"{today_str}_{sym}_ENTRY_LONG"
 
-                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
+                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and crossed_dn and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
                                     trade_side = "Sell"
                                     entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
 
