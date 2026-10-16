@@ -2524,7 +2524,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
         await update.message.reply_text(
             "🟢 <b>AUTO BOT STARTED</b> <code>v29-calc</code>\n\n"
-            f"• <b>Symbol:</b> {user_trade_settings.get('symbol')}\n"
+            f"• <b>Symbol:</b> {', '.join(user_trade_settings.get('symbols') or [user_trade_settings.get('symbol')])}\n"
             f"• <b>Margin:</b> ${amt}\n"
             f"• <b>Leverage:</b> {lev}x\n"
             f"• <b>Total Position Size:</b> ${total_position}\n"
