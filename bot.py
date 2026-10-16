@@ -2197,27 +2197,24 @@ def check_bybit_position_closed(current_price: float) -> str:
         sl = _active_position.get("sl")
         tp = _active_position.get("tp")
         trail = _active_position.get("trail_level")
-        reason = "SL / Trailing SL hit (ya manual close)"
+        reason = "Manual close"
         try:
             px = float(current_price or 0)
             slf = float(sl or 0)
             tpf = float(tp or 0)
+            # 799 points galat save ho to price SL banao
+            if slf and slf < 1000 and px > 1000:
+                slf = (float(entry) - slf) if side == "Buy" else (float(entry) + slf)
             if side == "Buy":
                 if tpf and px >= tpf * 0.999:
                     reason = "Take Profit T10 hit"
                 elif slf and px <= slf * 1.001:
-                    if trail and int(trail) >= 1:
-                        reason = f"Trailing SL hit (locked near T{trail})"
-                    else:
-                        reason = "Initial midpoint SL hit"
+                    reason = f"Trailing SL hit (T{trail})" if trail and int(trail) >= 1 else "Initial SL hit"
             else:
                 if tpf and px <= tpf * 1.001:
                     reason = "Take Profit ST10 hit"
                 elif slf and px >= slf * 0.999:
-                    if trail and int(trail) >= 1:
-                        reason = f"Trailing SL hit (locked near ST{trail})"
-                    else:
-                        reason = "Initial midpoint SL hit"
+                    reason = f"Trailing SL hit (ST{trail})" if trail and int(trail) >= 1 else "Initial SL hit"
         except Exception:
             pass
         msg = (
