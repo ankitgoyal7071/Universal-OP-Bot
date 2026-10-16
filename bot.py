@@ -50,7 +50,7 @@ TRADE_STATE_FILE = "bot_trade_state.json"
 INITIAL_SL_POINTS = 799.0
 ENTRY_AFTER_HOUR_IST = 16
 BOT_TRADING_ACTIVE = False
-user_trade_settings = {"amount": 10.0, "leverage": 20}
+user_trade_settings = {"amount": 10.0, "leverage": 20, "symbol": "BTCUSDT"}
 BLOCKED_SAME_DIR = set()  # midpoint SL hit → isi direction me auto dubara nahi
 
 LAST_UTC_DAY = None
@@ -62,6 +62,7 @@ def load_trade_state():
         BOT_TRADING_ACTIVE = bool(data.get("active", False))
         user_trade_settings["amount"] = float(data.get("amount", user_trade_settings.get("amount", 5)))
         user_trade_settings["leverage"] = int(data.get("leverage", user_trade_settings.get("leverage", 50)))
+        user_trade_settings["symbol"] = str(data.get("symbol") or "BTCUSDT")
         pos = data.get("position")
         if isinstance(pos, dict) and pos.get("side"):
             _active_position.update(pos)
@@ -74,6 +75,7 @@ def save_trade_state():
         "active": bool(BOT_TRADING_ACTIVE),
         "amount": float(user_trade_settings.get("amount", 5)),
         "leverage": int(user_trade_settings.get("leverage", 20)),
+        "symbol": str(user_trade_settings.get("symbol") or "BTCUSDT"),
         "position": dict(_active_position),
         "utc_day": LAST_UTC_DAY,
         "blocked": list(BLOCKED_SAME_DIR),
@@ -511,6 +513,7 @@ def calculate_op_levels(df, symbol):
 
     return {
         "current_price": current_price,
+        "day_open": round(float(dop), 2),
         "range": range1, "pivot": pivot, "tc": tc, "bc": bc,
         "cpr_type": cpr_type,
         "market_mood": get_market_mood(),
@@ -584,9 +587,11 @@ def _bybit_get_json(path_query: str):
 
 
 
-def get_bybit_btc_live_price():
-    """Bybit BTCUSDT linear mark/last — fast, for 1-second entry checks."""
-    data = _bybit_get_json("/v5/market/tickers?category=spot&symbol=BTCUSDT")
+def get_bybit_live_price(symbol="BTCUSDT"):
+    """Bybit linear mark/last for BTCUSDT or XAUUSDT."""
+    data = _bybit_get_json(f"/v5/market/tickers?category=linear&symbol={symbol}")
+    if not data:
+        data = _bybit_get_json(f"/v5/market/tickers?category=spot&symbol={symbol}")
     if not data:
         return 0.0
     lst = data.get("result", {}).get("list", [])
@@ -595,6 +600,10 @@ def get_bybit_btc_live_price():
     mark_p = float(lst[0].get("markPrice") or 0)
     last_p = float(lst[0].get("lastPrice") or 0)
     return mark_p or last_p
+
+
+def get_bybit_btc_live_price():
+    return get_bybit_live_price("BTCUSDT")
 
 
 def fetch_bybit_btc_futures_df():
@@ -1148,7 +1157,10 @@ async def target_checker_job(application):
 
             # Auto-trade BTC even if nobody tapped the button / after Render restart
             if BOT_TRADING_ACTIVE:
-                all_symbols.add("🪙 BITCOIN (BTC)")
+                if str(user_trade_settings.get("symbol")) == "XAUUSDT":
+                    all_symbols.add("💱 SPOT GOLD (XAUUSD)")
+                else:
+                    all_symbols.add("🪙 BITCOIN (BTC)")
 
             if all_symbols:
                 for sym in all_symbols:
@@ -1163,6 +1175,10 @@ async def target_checker_job(application):
                     if df is not None and not df.empty:
                         lvl = calculate_op_levels(df, sym)
                         current_lcp = lvl['current_price']
+                        if BOT_TRADING_ACTIVE:
+                            live_px = get_bybit_live_price(str(user_trade_settings.get('symbol') or 'BTCUSDT'))
+                            if live_px:
+                                current_lcp = live_px
                         
                         b_conf = lvl['b_conf']
                         s_conf = lvl['s_conf']
@@ -1208,7 +1224,9 @@ async def target_checker_job(application):
                             target_key = ""
 
                         # ===== AUTO TRADE BTC: Entry b_conf/s_conf + midpoint SL + T1-T10 trail =====
-                        if BOT_TRADING_ACTIVE and ("BTC" in sym.upper() or "BITCOIN" in sym.upper()):
+                        trade_sym = str(user_trade_settings.get("symbol") or "BTCUSDT")
+                        want = "BTC" if trade_sym == "BTCUSDT" else "GOLD"
+                        if BOT_TRADING_ACTIVE and (want in sym.upper() or ("BTC" in sym.upper() and trade_sym == "BTCUSDT")):
                             try:
                                 live_px = get_bybit_btc_live_price() or current_lcp
                                 current_lcp = live_px
@@ -1225,11 +1243,11 @@ async def target_checker_job(application):
 
                                 ist_now = datetime.now(pytz.timezone("Asia/Kolkata"))
                                 day_used = f"{today_str}_{sym}_ENTRY_DONE" in notified_today
-                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and not day_used and current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
+                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and current_lcp >= b_conf and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
                                     trade_side = "Buy"
                                     entry_key = f"{today_str}_{sym}_ENTRY_LONG"
 
-                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and not day_used and current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
+                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and current_lcp <= s_conf and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
                                     trade_side = "Sell"
                                     entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
 
@@ -1845,7 +1863,7 @@ except ImportError:
     BybitHTTP = None
     logging.warning("pybit not installed. Run: pip install pybit")
 
-AMOUNT, LEVERAGE = range(2)
+SYMBOL, AMOUNT, LEVERAGE = range(3)
 # BOT_TRADING_ACTIVE and user_trade_settings already set near top
 _active_position = {
     "side": None,
@@ -1929,7 +1947,7 @@ def bybit_place_spot_order(side: str, qty: str, extra: dict = None):
     """Name legacy; ab USDT-M linear (Futures) order."""
     payload = {
         "category": BYBIT_CATEGORY,
-        "symbol": BYBIT_SYMBOL,
+        "symbol": str(user_trade_settings.get("symbol") or BYBIT_SYMBOL),
         "side": side,
         "orderType": "Market",
         "qty": str(qty),
@@ -1992,7 +2010,8 @@ def compute_trail_sl(side: str, price: float, levels: dict, current_sl: float) -
     Returns (new_sl, trail_level_index)
     """
     entry = float(levels.get("entry") or 0)
-    base = entry - INITIAL_SL_POINTS if side == "Buy" else entry + INITIAL_SL_POINTS
+    sl_pts = round(float(entry) * 0.01, 2) if str(user_trade_settings.get("symbol")) == "XAUUSDT" else INITIAL_SL_POINTS
+    base = entry - sl_pts if side == "Buy" else entry + sl_pts
     new_sl = base
     trail_lvl = 0
     book = levels.get("bt") if side == "Buy" else levels.get("st")
@@ -2017,7 +2036,7 @@ def update_bybit_stop_loss(new_sl: float) -> bool:
         session = get_bybit_session()
         session.set_trading_stop(
             category=BYBIT_CATEGORY,
-            symbol=BYBIT_SYMBOL,
+            symbol=str(user_trade_settings.get("symbol") or BYBIT_SYMBOL),
             stopLoss=str(new_sl),
             slTriggerBy="LastPrice",
             tpslMode="Full",
@@ -2032,8 +2051,8 @@ def update_bybit_stop_loss(new_sl: float) -> bool:
 def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict, force: bool = False) -> str:
     """
     Entry on b_conf (Buy) / s_conf (Sell).
-    Initial SL = midpoint of b_conf & s_conf.
-    TP optional at T10 / ST10 (far target); main exit is trailing SL.
+    Initial SL = entry +/- 799 points.
+    TP at T12 / ST12; trail T2->T1 ... T12->T11.
     """
     global _active_position
 
@@ -2057,11 +2076,10 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     leverage = int(settings.get("leverage", 20))
     leverage = max(1, min(150, leverage))
     px = max(float(current_price or 0), 1.0)
-    # Qty in BTC (min 0.001). Not a fixed dollar size — follows price.
-    btc_qty = float(settings.get("btc_qty") or 0.001)
-    btc_qty = max(0.001, round(btc_qty, 3))
-    qty = f"{btc_qty:.3f}"
-    notional = round(btc_qty * px, 2)
+    trade_symbol = str(settings.get("symbol") or user_trade_settings.get("symbol") or "BTCUSDT")
+    notional = max(float(amount) * leverage, 1.0)
+    raw_qty = notional / px
+    qty = f"{max(0.001, round(raw_qty, 3)):.3f}"
 
     try:
         bybit_signed_request("POST", "/v5/position/switch-isolated", {
@@ -2085,7 +2103,8 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
 
     levels = _snapshot_levels(lvl)
     levels["entry"] = float(current_price)
-    mid_sl = round(float(current_price) - INITIAL_SL_POINTS, 2) if side == "Buy" else round(float(current_price) + INITIAL_SL_POINTS, 2)
+    sl_pts = round(float(current_price) * 0.01, 2) if str(user_trade_settings.get('symbol')) == 'XAUUSDT' else INITIAL_SL_POINTS
+    mid_sl = round(float(current_price) - sl_pts, 2) if side == "Buy" else round(float(current_price) + sl_pts, 2)
     stop_loss = str(mid_sl)
 
     # Far TP at T12 / ST12
@@ -2111,7 +2130,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
             session = get_bybit_session()
             order = session.place_order(
                 category=BYBIT_CATEGORY,
-                symbol=BYBIT_SYMBOL,
+                symbol=str(user_trade_settings.get("symbol") or BYBIT_SYMBOL),
                 side=side,
                 orderType="Market",
                 qty=qty,
@@ -2303,7 +2322,7 @@ def close_bybit_position(reason="manual"):
         try:
             session.place_order(
                 category=BYBIT_CATEGORY,
-                symbol=BYBIT_SYMBOL,
+                symbol=str(user_trade_settings.get("symbol") or BYBIT_SYMBOL),
                 side=close_side,
                 orderType="Market",
                 qty=f"{float(btc_qty):.3f}",
@@ -2326,7 +2345,7 @@ def close_bybit_position(reason="manual"):
         try:
             session.place_order(
                 category=BYBIT_CATEGORY,
-                symbol=BYBIT_SYMBOL,
+                symbol=str(user_trade_settings.get("symbol") or BYBIT_SYMBOL),
                 side=close_side,
                 orderType="Market",
                 qty=f"{max(0.001, round(float(notional) / max(float(_active_position.get('entry') or 1), 1), 3)):.3f}",
@@ -2411,8 +2430,28 @@ async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     await update.message.reply_text(
+        "📌 <b>Kaunsa symbol?</b>\n"
+        "Likho: <code>BTC</code> ya <code>XAUUSD</code>",
+        parse_mode="HTML",
+    )
+    return SYMBOL
+
+
+
+async def receive_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = (update.message.text or "").upper().replace(" ", "")
+    if raw in ("BTC", "BITCOIN", "BTCUSDT"):
+        sym = "BTCUSDT"
+    elif raw in ("XAU", "XAUUSD", "GOLD", "XAUUSDT"):
+        sym = "XAUUSDT"
+    else:
+        await update.message.reply_text("⚠️ Sirf <b>BTC</b> ya <b>XAUUSD</b> likho.", parse_mode="HTML")
+        return SYMBOL
+    context.user_data["trade_symbol"] = sym
+    await update.message.reply_text(
+        f"✅ Symbol: <b>{sym}</b>\n\n"
         "💰 <b>Trading Amount Set Karein:</b>\n"
-        "Kripya $1 se $20 ke beech apna margin amount enter karein (jaise: 5 ya 10):",
+        "Kripya $1 se $20 ke beech margin enter karein (jaise: 5 ya 10):",
         parse_mode="HTML",
     )
     return AMOUNT
@@ -2467,20 +2506,22 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return LEVERAGE
         user_trade_settings["amount"] = amt
         user_trade_settings["leverage"] = lev
+        user_trade_settings["symbol"] = context.user_data.get("trade_symbol") or "BTCUSDT"
         BOT_TRADING_ACTIVE = True
         save_trade_state()
 
         total_position = amt * lev
         keys_ok = bool(BYBIT_API_KEY and BYBIT_API_SECRET)
         await update.message.reply_text(
-            "🟢 <b>BTC FUTURES BOT STARTED</b> <code>v29-calc</code>\n\n"
+            "🟢 <b>AUTO BOT STARTED</b> <code>v29-calc</code>\n\n"
+            f"• <b>Symbol:</b> {user_trade_settings.get('symbol')}\n"
             f"• <b>Margin:</b> ${amt}\n"
             f"• <b>Leverage:</b> {lev}x\n"
             f"• <b>Total Position Size:</b> ${total_position}\n"
             f"• <b>Bybit API Keys:</b> {'✅ Set' if keys_ok else '❌ Missing (set BYBIT_API_KEY & SECRET)'}\n\n"
             "🚀 Bot ab <b>Buy Above Confirm</b> / <b>Sell Below Confirm</b> pe entry lega.\n"
-            "• Initial SL = midpoint (b_conf + s_conf)/2\n"
-            "• Trail: T2→T1 … T10→T9, above T10→T10 lock (SHORT same)\n\n"
+            "• Initial SL = entry ± 799 points fixed\n"
+            "• Trail: T2→T1 … T12→T11\n"
             "Manual: /long  /short  /close\nBand (auto engine): /stoptrade",
             parse_mode="HTML",
         )
@@ -2606,6 +2647,7 @@ def main():
             MessageHandler(filters.Regex("^⚙️ AUTO TRADE$"), start_trading_flow),
         ],
         states={
+            SYMBOL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_symbol)],
             AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)],
             LEVERAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_leverage)],
         },
