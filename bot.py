@@ -1158,10 +1158,11 @@ async def target_checker_job(application):
 
             # Auto-trade BTC even if nobody tapped the button / after Render restart
             if BOT_TRADING_ACTIVE:
-                if str(user_trade_settings.get("symbol")) == "XAUUSDT":
-                    all_symbols.add("💱 SPOT GOLD (XAUUSD)")
-                else:
+                chosen = user_trade_settings.get("symbols") or [user_trade_settings.get("symbol") or "BTCUSDT"]
+                if "BTCUSDT" in chosen:
                     all_symbols.add("🪙 BITCOIN (BTC)")
+                if "XAUUSDT" in chosen:
+                    all_symbols.add("💱 SPOT GOLD (XAUUSD)")
 
             if all_symbols:
                 for sym in all_symbols:
@@ -1225,12 +1226,15 @@ async def target_checker_job(application):
                             target_key = ""
 
                         # ===== AUTO TRADE BTC: Entry b_conf/s_conf + midpoint SL + T1-T10 trail =====
-                        trade_sym = str(user_trade_settings.get("symbol") or "BTCUSDT")
-                        want = "BTC" if trade_sym == "BTCUSDT" else "GOLD"
-                        if BOT_TRADING_ACTIVE and (want in sym.upper() or ("BTC" in sym.upper() and trade_sym == "BTCUSDT")):
+                        chosen = user_trade_settings.get("symbols") or [user_trade_settings.get("symbol") or "BTCUSDT"]
+                        is_btc = "BTC" in sym.upper()
+                        is_gold = "GOLD" in sym.upper() or "XAU" in sym.upper()
+                        trade_sym = "BTCUSDT" if is_btc else "XAUUSDT"
+                        if BOT_TRADING_ACTIVE and ((is_btc and "BTCUSDT" in chosen) or (is_gold and "XAUUSDT" in chosen)):
                             try:
-                                live_px = get_bybit_btc_live_price() or current_lcp
+                                live_px = get_bybit_live_price(trade_sym) or current_lcp
                                 current_lcp = live_px
+                                user_trade_settings["symbol"] = trade_sym
                                 trade_side = None
                                 entry_key = None
 
@@ -1243,8 +1247,8 @@ async def target_checker_job(application):
                                     notified_today.add(hb_key)
 
                                 ist_now = datetime.now(pytz.timezone("Asia/Kolkata"))
-                                prev_px = LAST_BTC_PX.get("px")
-                                LAST_BTC_PX["px"] = current_lcp
+                                prev_px = LAST_BTC_PX.get(trade_sym)
+                                LAST_BTC_PX[trade_sym] = current_lcp
                                 crossed_up = prev_px is not None and prev_px < b_conf <= current_lcp
                                 crossed_dn = prev_px is not None and prev_px > s_conf >= current_lcp
                                 if ist_now.hour >= ENTRY_AFTER_HOUR_IST and crossed_up and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
@@ -2289,8 +2293,8 @@ def manage_open_position_trail(current_price: float, application_bot=None) -> st
     old_sl = float(_active_position.get("sl") or levels.get("mid") or 0)
     new_sl, trail_lvl = compute_trail_sl(side, current_price, levels, old_sl)
 
-    if abs(new_sl - old_sl) < 0.01:
-        return ""  # no change
+    if not new_sl or new_sl <= 0 or abs(new_sl - old_sl) < 0.01:
+        return ""
 
     ok = update_bybit_stop_loss(new_sl)
     if not ok:
@@ -2435,7 +2439,7 @@ async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_text(
         "📌 <b>Kaunsa symbol?</b>\n"
-        "Likho: <code>BTC</code> ya <code>XAUUSD</code>",
+        "Likho: <code>BTC</code> / <code>XAUUSD</code> / <code>BOTH</code>",
         parse_mode="HTML",
     )
     return SYMBOL
@@ -2445,13 +2449,17 @@ async def start_trading_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def receive_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw = (update.message.text or "").upper().replace(" ", "")
     if raw in ("BTC", "BITCOIN", "BTCUSDT"):
-        sym = "BTCUSDT"
+        syms = ["BTCUSDT"]
     elif raw in ("XAU", "XAUUSD", "GOLD", "XAUUSDT"):
-        sym = "XAUUSDT"
+        syms = ["XAUUSDT"]
+    elif raw in ("BOTH", "BTCXAU", "XAUUSD+BTC", "BTC+XAUUSD"):
+        syms = ["BTCUSDT", "XAUUSDT"]
     else:
-        await update.message.reply_text("⚠️ Sirf <b>BTC</b> ya <b>XAUUSD</b> likho.", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Likho: BTC, XAUUSD ya BOTH")
         return SYMBOL
-    context.user_data["trade_symbol"] = sym
+    context.user_data["trade_symbol"] = syms[0]
+    context.user_data["trade_symbols"] = syms
+    sym = ",".join(syms)
     await update.message.reply_text(
         f"✅ Symbol: <b>{sym}</b>\n\n"
         "💰 <b>Trading Amount Set Karein:</b>\n"
@@ -2511,6 +2519,7 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_trade_settings["amount"] = amt
         user_trade_settings["leverage"] = lev
         user_trade_settings["symbol"] = context.user_data.get("trade_symbol") or "BTCUSDT"
+        user_trade_settings["symbols"] = list(context.user_data.get("trade_symbols") or [user_trade_settings["symbol"]])
         BOT_TRADING_ACTIVE = True
         save_trade_state()
 
