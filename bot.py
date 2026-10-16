@@ -1820,6 +1820,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         symbol_input = text.strip()
+        if symbol_input.upper().replace(" ", "") in ("BOTH", "BTC", "XAUUSD", "XAU", "GOLD", "BTCUSDT", "XAUUSDT"):
+            await update.message.reply_text("Trade ke liye /trade dabao, phir BOTH / BTC / XAUUSD likho.")
+            return
         if symbol_input.replace(".", "", 1).isdigit() and len(symbol_input) <= 6:
             await update.message.reply_text(
                 "⚠️ Number levels nahi hai.\n"
