@@ -48,7 +48,8 @@ WAITING_MANUAL_LEV = {}  # user_id -> "Buy"/"Sell"
 # Bybit auto-trade flags (persisted so Render restart pe OFF na ho)
 TRADE_STATE_FILE = "bot_trade_state.json"
 INITIAL_SL_POINTS = 799.0
-ENTRY_AFTER_HOUR_IST = 16
+ENTRY_AFTER_HOUR_IST = 15
+MAX_TRADES_DAY = 5
 LAST_BTC_PX = {"px": None}
 BOT_TRADING_ACTIVE = False
 user_trade_settings = {"amount": 10.0, "leverage": 20, "symbol": "BTCUSDT"}
@@ -1251,13 +1252,16 @@ async def target_checker_job(application):
                                 LAST_BTC_PX[trade_sym] = current_lcp
                                 crossed_up = prev_px is not None and prev_px < b_conf <= current_lcp
                                 crossed_dn = prev_px is not None and prev_px > s_conf >= current_lcp
-                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and crossed_up and f"{today_str}_{sym}_ENTRY_LONG" not in notified_today:
+                                if _active_position.get("side"):
+                                    continue
+                                day_count = sum(1 for k in notified_today if k.startswith(f"{today_str}_") and k.endswith("_ENTRY"))
+                                if ist_now.hour >= ENTRY_AFTER_HOUR_IST and day_count < MAX_TRADES_DAY and crossed_up:
                                     trade_side = "Buy"
-                                    entry_key = f"{today_str}_{sym}_ENTRY_LONG"
+                                    entry_key = f"{today_str}_{sym}_{day_count+1}_ENTRY"
 
-                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and crossed_dn and f"{today_str}_{sym}_ENTRY_SHORT" not in notified_today:
+                                elif ist_now.hour >= ENTRY_AFTER_HOUR_IST and day_count < MAX_TRADES_DAY and crossed_dn:
                                     trade_side = "Sell"
-                                    entry_key = f"{today_str}_{sym}_ENTRY_SHORT"
+                                    entry_key = f"{today_str}_{sym}_{day_count+1}_ENTRY"
 
                                 if trade_side and entry_key:
                                     try:
@@ -2024,12 +2028,12 @@ def compute_trail_sl(side: str, price: float, levels: dict, current_sl: float) -
     trail_lvl = 0
     book = levels.get("bt") if side == "Buy" else levels.get("st")
     book = book or {}
-    for n in range(2, 13):
+    for n in range(1, 11):
         tn = book.get(n) or 0
         hit = price >= tn if side == "Buy" else price <= tn
         if tn and hit:
-            new_sl = book.get(n - 1) or base
-            trail_lvl = n - 1
+            new_sl = tn
+            trail_lvl = n
     if current_sl:
         if side == "Buy" and new_sl < current_sl:
             new_sl = current_sl
@@ -2060,7 +2064,7 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     """
     Entry on b_conf (Buy) / s_conf (Sell).
     Initial SL = entry +/- 799 points.
-    TP at T12 / ST12; trail T2->T1 ... T12->T11.
+    TP at T12 / ST12; trail T1->T1 ... T10->T10.
     """
     global _active_position
 
@@ -2075,8 +2079,8 @@ def place_bybit_trade(side: str, current_price: float, lvl: dict, settings: dict
     ist_today = ist_now.strftime("%Y-%m-%d")
     if not force and ist_now.hour < ENTRY_AFTER_HOUR_IST:
         return f"⛔ Entry sirf {ENTRY_AFTER_HOUR_IST}:00 IST ke baad. Abhi {ist_now.strftime('%H:%M')}."
-    if not force and str(_active_position.get("entry_day") or "") == ist_today:
-        return "⛔ Sirf ek entry ek din. Aaj ka order ho chuka."
+    if not force and int(_active_position.get("day_count") or 0) >= MAX_TRADES_DAY and str(_active_position.get("entry_day") or "") == ist_today:
+        return "⛔ Aaj 5 entry ho chuki."
     if _active_position.get("side") == side and pos_day == utc_today:
         return f"ℹ️ Already in {side} position on {BYBIT_SYMBOL} aaj. Skip new order."
 
