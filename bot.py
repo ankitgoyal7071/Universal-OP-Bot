@@ -811,7 +811,9 @@ def fetch_data(symbol):
         
         if is_gold:
             bybit_df = fetch_bybit_btc_futures_df("XAUUSDT")
-            if bybit_df is not None and len(bybit_df) >= 5:
+            last_px = float(bybit_df["Close"].iloc[-1]) if bybit_df is not None and len(bybit_df) else 0
+            # gold ~4k. 80k matlab BTC data galti se aa gaya
+            if bybit_df is not None and len(bybit_df) >= 5 and 500 < last_px < 20000:
                 return bybit_df, "BYBIT:XAUUSDT"
             resolved = "GC=F"
         elif is_silver:
@@ -889,12 +891,15 @@ def fetch_data(symbol):
 def format_color_display(matched_symbol, today_str, lvl, raw_symbol):
     src_line = ""
     rs = (raw_symbol or "").upper()
-    is_btc = (
+    is_gold_card = "XAU" in rs or "GOLD" in (matched_symbol or "").upper()
+    is_btc = (not is_gold_card) and (
         "BYBIT" in rs
         or "BTC" in (matched_symbol or "").upper()
         or "BITCOIN" in (matched_symbol or "").upper()
     )
-    if is_btc:
+    if is_gold_card:
+        src_line = "📡 <b>Price Source:</b> <code>Bybit XAUUSDT</code>"
+    elif is_btc:
         src_line = "📡 <b>Price Source:</b> <code>Bybit BTCUSDT | Day reset: 5:30 AM IST (00:00 UTC / TradingView)</code>"
     out = [
         f"📊 <b>{matched_symbol.upper()} • PRO OP LEVELS ALGO</b>",
