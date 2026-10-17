@@ -608,7 +608,7 @@ def get_bybit_btc_live_price():
     return get_bybit_live_price("BTCUSDT")
 
 
-def fetch_bybit_btc_futures_df():
+def fetch_bybit_btc_futures_df(symbol="BTCUSDT"):
     """
     Build daily OHLC on UTC calendar (TradingView / Bybit daily).
     New day = 00:00 UTC = 5:30 AM IST.
@@ -619,7 +619,7 @@ def fetch_bybit_btc_futures_df():
         today = now_utc.date()
 
         k_data = _bybit_get_json(
-            "/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=500"
+            f"/v5/market/kline?category=linear&symbol={symbol}&interval=60&limit=500"
         )
         if not k_data:
             return None
@@ -640,7 +640,7 @@ def fetch_bybit_btc_futures_df():
                 "Volume": float(item[5]),
             })
         hdf = pd.DataFrame(rows).sort_values("ts")
-        live = get_bybit_btc_live_price()
+        live = get_bybit_live_price(symbol)
 
         days = []
         unique_days = sorted(set(hdf["day"].tolist() + [today]))
@@ -810,6 +810,9 @@ def fetch_data(symbol):
         is_silver = "XAG" in clean_sym or "SPOT SILVER" in clean_sym
         
         if is_gold:
+            bybit_df = fetch_bybit_btc_futures_df("XAUUSDT")
+            if bybit_df is not None and len(bybit_df) >= 5:
+                return bybit_df, "BYBIT:XAUUSDT"
             resolved = "GC=F"
         elif is_silver:
             resolved = "SI=F"
